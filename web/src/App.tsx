@@ -12,6 +12,7 @@ import { OrdersPage } from "./pages/OrdersPage";
 import { PosPage } from "./pages/PosPage";
 import { ProductDetailPage } from "./pages/ProductDetailPage";
 import { ProductsAdminPage } from "./pages/ProductsAdminPage";
+import { RolesPoliciesPage } from "./pages/RolesPoliciesPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { StaffPage } from "./pages/StaffPage";
 import { StockPage } from "./pages/StockPage";
@@ -38,6 +39,7 @@ export default function App() {
             <Route path="customers" element={<CustomersPage />} />
             <Route path="stock" element={<StockPage />} />
             <Route path="admin/staff" element={<StaffPage />} />
+            <Route path="admin/roles" element={<RolesPoliciesPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
         </Route>

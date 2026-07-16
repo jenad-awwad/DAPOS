@@ -19,16 +19,16 @@ const createOrderSchema = z.object({
     .array(
       z.object({
         productId: z.string().min(1),
-        quantity: z.number().int().positive(),
-        unitPrice: z.number().min(0).optional(),
-        discount: z.number().min(0).optional(),
+        quantity: z.coerce.number().int().positive(),
+        unitPrice: z.coerce.number().min(0).optional(),
+        discount: z.coerce.number().min(0).optional(),
       }),
     )
     .min(1),
   paymentMethod: z.nativeEnum(PaymentMethod),
   customerId: z.string().optional(),
   notes: z.string().optional(),
-  discountTotal: z.number().min(0).optional(),
+  discountTotal: z.coerce.number().min(0).optional(),
 });
 
 const createProjectOrderSchema = z.object({

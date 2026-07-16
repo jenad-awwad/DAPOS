@@ -20,13 +20,13 @@ import { IconEdit, IconPlus } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Navigate } from "react-router-dom";
-import { useIsAdmin } from "../hooks/useRoles";
+import { useHasPermission } from "../hooks/useRoles";
 import { createStaff, fetchStaff, updateStaff } from "../lib/api";
 import { roleLabel } from "../lib/format";
 import type { StaffUser, UserRole } from "../lib/types";
 
 export function StaffPage() {
-  const isAdmin = useIsAdmin();
+  const canManageStaff = useHasPermission("staff.manage");
   const queryClient = useQueryClient();
   const [opened, { open, close }] = useDisclosure(false);
   const [editing, setEditing] = useState<StaffUser | null>(null);
@@ -34,7 +34,7 @@ export function StaffPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["staff"],
     queryFn: fetchStaff,
-    enabled: isAdmin,
+    enabled: canManageStaff,
   });
 
   const form = useForm({
@@ -75,7 +75,7 @@ export function StaffPage() {
     onError: (err: Error) => notifications.show({ color: "red", message: err.message }),
   });
 
-  if (!isAdmin) return <Navigate to="/" replace />;
+  if (!canManageStaff) return <Navigate to="/" replace />;
   if (isLoading) return <Loader color="green" />;
 
   return (

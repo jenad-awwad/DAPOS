@@ -35,7 +35,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
         );
       }
       if (product.onStock < 1) return current;
-      return [...current, { product, quantity: 1, unitPrice: product.price }];
+      return [...current, { product, quantity: 1, unitPrice: Number(product.price) || 0 }];
     });
   };
 
@@ -46,11 +46,15 @@ export function CartProvider({ children }: { children: ReactNode }) {
   };
 
   const setQuantity = (productId: string, quantity: number) => {
+    const nextQuantity = Number(quantity);
     setItems((current) =>
       current
         .map((item) => {
           if (item.product.id !== productId) return item;
-          const next = Math.max(0, Math.min(quantity, item.product.onStock));
+          const next = Math.max(
+            0,
+            Math.min(Number.isFinite(nextQuantity) ? nextQuantity : 1, item.product.onStock),
+          );
           return { ...item, quantity: next };
         })
         .filter((item) => item.quantity > 0),
@@ -58,10 +62,14 @@ export function CartProvider({ children }: { children: ReactNode }) {
   };
 
   const setUnitPrice = (productId: string, unitPrice: number) => {
+    const nextPrice = Number(unitPrice);
     setItems((current) =>
       current.map((item) =>
         item.product.id === productId
-          ? { ...item, unitPrice: Math.max(0, unitPrice) }
+          ? {
+              ...item,
+              unitPrice: Math.max(0, Number.isFinite(nextPrice) ? nextPrice : 0),
+            }
           : item,
       ),
     );

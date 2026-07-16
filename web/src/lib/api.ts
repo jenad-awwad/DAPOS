@@ -10,6 +10,7 @@ import type {
   LoginResponse,
   Order,
   PaymentMethod,
+  PermissionKey,
   Product,
   StaffUser,
   StockMovement,
@@ -17,6 +18,7 @@ import type {
   User,
   UserRole,
 } from "./types";
+import type { PermissionDefinition, RolePoliciesMap } from "./permissions";
 
 const API_URL =
   import.meta.env.VITE_API_URL ??
@@ -317,11 +319,35 @@ export function createStaff(payload: {
 
 export function updateStaff(
   id: string,
-  payload: Partial<{ name: string; phone: string; pin: string; role: UserRole; isActive: boolean }>,
+  payload: Partial<{
+    name: string;
+    phone: string;
+    pin: string;
+    role: UserRole;
+    isActive: boolean;
+    customPolicies: PermissionKey[] | null;
+  }>,
 ) {
   return request<{ user: StaffUser }>(`/users/${id}`, {
     method: "PATCH",
     body: JSON.stringify(payload),
+  });
+}
+
+export function fetchAccessCatalog() {
+  return request<{ permissions: PermissionDefinition[] }>("/access/catalog");
+}
+
+export function fetchRolePolicies() {
+  return request<{ policies: RolePoliciesMap; defaults: RolePoliciesMap }>(
+    "/access/role-policies",
+  );
+}
+
+export function updateRolePolicies(policies: RolePoliciesMap) {
+  return request<{ policies: RolePoliciesMap }>("/access/role-policies", {
+    method: "PATCH",
+    body: JSON.stringify(policies),
   });
 }
 

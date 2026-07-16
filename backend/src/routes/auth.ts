@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { signToken } from "../lib/auth.js";
 import { phoneCandidates } from "../lib/phone.js";
+import { resolveUserPermissions } from "../lib/permissions.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
 
@@ -42,6 +43,12 @@ authRoutes.post("/login", async (c) => {
     role: user.role,
   });
 
+  const permissions = resolveUserPermissions(
+    user.role,
+    user.customPolicies,
+    user.store.rolePolicies,
+  );
+
   return c.json({
     token,
     user: serialize({
@@ -50,6 +57,7 @@ authRoutes.post("/login", async (c) => {
       phone: user.phone,
       role: user.role,
       storeId: user.storeId,
+      permissions,
     }),
     store: serialize({
       id: user.store.id,
@@ -72,6 +80,12 @@ authRoutes.get("/me", requireAuth, async (c) => {
     return c.json({ error: "User not found" }, 404);
   }
 
+  const permissions = resolveUserPermissions(
+    user.role,
+    user.customPolicies,
+    user.store.rolePolicies,
+  );
+
   return c.json({
     user: serialize({
       id: user.id,
@@ -79,6 +93,7 @@ authRoutes.get("/me", requireAuth, async (c) => {
       phone: user.phone,
       role: user.role,
       storeId: user.storeId,
+      permissions,
     }),
     store: serialize({
       id: user.store.id,

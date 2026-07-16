@@ -2,16 +2,35 @@ export type Currency = "ILS" | "USD" | "JOD";
 
 export type UserRole = "ADMIN" | "MANAGER" | "CASHIER";
 
+export type PermissionKey =
+  | "dashboard.view"
+  | "pos.sales"
+  | "pos.projects"
+  | "calendar.manage"
+  | "orders.view"
+  | "orders.void"
+  | "inventory.view"
+  | "inventory.manage"
+  | "products.manage"
+  | "categories.manage"
+  | "customers.manage"
+  | "stock.view"
+  | "staff.manage"
+  | "roles.manage"
+  | "settings.manage";
+
 export type User = {
   id: string;
   name: string;
   phone: string;
   role: UserRole;
   storeId: string;
+  permissions?: PermissionKey[];
 };
 
 export type StaffUser = User & {
   isActive: boolean;
+  customPolicies: PermissionKey[] | null;
   createdAt: string;
   updatedAt: string;
 };

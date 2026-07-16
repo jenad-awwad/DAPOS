@@ -1,11 +1,19 @@
-import { UserRole } from "@prisma/client";
+import { Prisma, UserRole } from "@prisma/client";
 import { Hono } from "hono";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { phoneCandidates } from "../lib/phone.js";
+import {
+  isPermissionKey,
+  parsePermissionList,
+} from "../lib/permissions.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
 import { requireAdmin, requireManager } from "../middleware/roles.js";
+
+const permissionSchema = z.string().refine(isPermissionKey, {
+  message: "Invalid permission key",
+});
 
 const createUserSchema = z.object({
   name: z.string().min(1).max(100),
@@ -20,6 +28,7 @@ const updateUserSchema = z.object({
   pin: z.string().min(4).max(6).optional(),
   role: z.nativeEnum(UserRole).optional(),
   isActive: z.boolean().optional(),
+  customPolicies: z.array(permissionSchema).nullable().optional(),
 });
 
 function sanitizeUser(user: {
@@ -29,9 +38,11 @@ function sanitizeUser(user: {
   role: UserRole;
   storeId: string;
   isActive: boolean;
+  customPolicies?: unknown;
   createdAt: Date;
   updatedAt: Date;
 }) {
+  const customPolicies = parsePermissionList(user.customPolicies);
   return {
     id: user.id,
     name: user.name,
@@ -39,6 +50,7 @@ function sanitizeUser(user: {
     role: user.role,
     storeId: user.storeId,
     isActive: user.isActive,
+    customPolicies,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
@@ -144,6 +156,14 @@ userRoutes.patch("/:id", requireAuth, requireAdmin, async (c) => {
       ...(parsed.data.pin !== undefined ? { pin: parsed.data.pin } : {}),
       ...(parsed.data.role !== undefined ? { role: parsed.data.role } : {}),
       ...(parsed.data.isActive !== undefined ? { isActive: parsed.data.isActive } : {}),
+      ...(parsed.data.customPolicies !== undefined
+        ? {
+            customPolicies:
+              parsed.data.customPolicies === null
+                ? Prisma.JsonNull
+                : parsed.data.customPolicies,
+          }
+        : {}),
     },
   });
 

@@ -16,14 +16,14 @@ import { useForm } from "@mantine/form";
 import { notifications } from "@mantine/notifications";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../context/AuthContext";
-import { useIsAdmin } from "../hooks/useRoles";
+import { useHasPermission } from "../hooks/useRoles";
 import { fetchStore, updateStore } from "../lib/api";
 import { formatDate, roleLabel } from "../lib/format";
 import type { Currency } from "../lib/types";
 
 export function SettingsPage() {
   const { user } = useAuth();
-  const isAdmin = useIsAdmin();
+  const canEditStore = useHasPermission("settings.manage");
   const queryClient = useQueryClient();
 
   const { data, isLoading } = useQuery({
@@ -79,7 +79,7 @@ export function SettingsPage() {
             <Title order={4} mb="md">
               Store
             </Title>
-            {isAdmin ? (
+            {canEditStore ? (
               <form onSubmit={form.onSubmit((v) => saveMutation.mutate({
                 name: v.name,
                 address: v.address || null,

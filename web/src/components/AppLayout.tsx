@@ -21,6 +21,7 @@ import {
   IconPackage,
   IconReceipt,
   IconSettings,
+  IconShieldLock,
   IconShoppingCart,
   IconUsers,
   IconHistory,
@@ -28,43 +29,44 @@ import {
 import { NavLink as RouterNavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useCart } from "../context/CartContext";
-import { useCanManage, useIsAdmin } from "../hooks/useRoles";
 import { roleLabel } from "../lib/format";
+import { NAV_PERMISSIONS, userCanAccess, type PermissionKey } from "../lib/permissions";
 
-const mainLinks = [
-  { to: "/", label: "Dashboard", icon: IconLayoutDashboard },
-  { to: "/pos", label: "Point of Sale", icon: IconShoppingCart },
-  { to: "/calendar", label: "Calendar", icon: IconCalendar },
-  { to: "/orders", label: "Orders", icon: IconReceipt },
-  { to: "/inventory", label: "Inventory", icon: IconBox },
-];
+type NavItem = {
+  to: string;
+  label: string;
+  icon: typeof IconLayoutDashboard;
+  permission?: PermissionKey | PermissionKey[];
+  always?: boolean;
+};
 
-const manageLinks = [
-  { to: "/admin/products", label: "Products", icon: IconPackage },
-  { to: "/admin/categories", label: "Categories", icon: IconCategory },
-  { to: "/customers", label: "Customers", icon: IconUsers },
-  { to: "/stock", label: "Stock history", icon: IconHistory },
-];
-
-const adminLinks = [
-  { to: "/admin/staff", label: "Staff", icon: IconUsers },
-  { to: "/settings", label: "Settings", icon: IconSettings },
+const allLinks: NavItem[] = [
+  { to: "/", label: "Dashboard", icon: IconLayoutDashboard, permission: NAV_PERMISSIONS["/"] },
+  { to: "/pos", label: "Point of Sale", icon: IconShoppingCart, permission: NAV_PERMISSIONS["/pos"] },
+  { to: "/calendar", label: "Calendar", icon: IconCalendar, permission: NAV_PERMISSIONS["/calendar"] },
+  { to: "/orders", label: "Orders", icon: IconReceipt, permission: NAV_PERMISSIONS["/orders"] },
+  { to: "/inventory", label: "Inventory", icon: IconBox, permission: NAV_PERMISSIONS["/inventory"] },
+  { to: "/admin/products", label: "Products", icon: IconPackage, permission: NAV_PERMISSIONS["/admin/products"] },
+  { to: "/admin/categories", label: "Categories", icon: IconCategory, permission: NAV_PERMISSIONS["/admin/categories"] },
+  { to: "/customers", label: "Customers", icon: IconUsers, permission: NAV_PERMISSIONS["/customers"] },
+  { to: "/stock", label: "Stock history", icon: IconHistory, permission: NAV_PERMISSIONS["/stock"] },
+  { to: "/admin/staff", label: "Staff", icon: IconUsers, permission: NAV_PERMISSIONS["/admin/staff"] },
+  { to: "/admin/roles", label: "Roles & policies", icon: IconShieldLock, permission: NAV_PERMISSIONS["/admin/roles"] },
+  { to: "/settings", label: "Settings", icon: IconSettings, always: true },
 ];
 
 export function AppLayout() {
   const [opened, { toggle }] = useDisclosure();
   const { user, store, signOut } = useAuth();
   const { itemCount } = useCart();
-  const canManage = useCanManage();
-  const isAdmin = useIsAdmin();
   const location = useLocation();
   const navigate = useNavigate();
 
-  const sidebarLinks = [
-    ...mainLinks,
-    ...(canManage ? manageLinks : []),
-    ...(isAdmin ? adminLinks : [{ to: "/settings", label: "Settings", icon: IconSettings }]),
-  ];
+  const sidebarLinks = allLinks.filter((link) => {
+    if (link.always) return true;
+    if (!link.permission) return true;
+    return userCanAccess(user, link.permission);
+  });
 
   return (
     <Box style={{ display: "flex", minHeight: "100vh" }}>
@@ -196,7 +198,7 @@ function SidebarContent({
   store: { name: string; currency: string };
   itemCount: number;
   pathname: string;
-  links: { to: string; label: string; icon: typeof IconLayoutDashboard }[];
+  links: NavItem[];
   onSignOut: () => void;
   onNavigate?: () => void;
 }) {

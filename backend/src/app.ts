@@ -16,6 +16,8 @@ import { customerRoutes } from "./routes/customers.js";
 
 import { userRoutes } from "./routes/users.js";
 
+import { accessRoutes } from "./routes/access.js";
+
 import { stockMovementRoutes } from "./routes/stock-movements.js";
 
 import { calendarRoutes } from "./routes/calendar.js";
@@ -49,6 +51,8 @@ app.route("/orders", orderRoutes);
 app.route("/customers", customerRoutes);
 
 app.route("/users", userRoutes);
+
+app.route("/access", accessRoutes);
 
 app.route("/stock-movements", stockMovementRoutes);
 

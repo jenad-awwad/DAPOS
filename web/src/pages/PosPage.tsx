@@ -282,12 +282,13 @@ export function PosPage() {
       const { order } = await createOrder({
         items: items.map((item) => ({
           productId: item.product.id,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
+          quantity: Number(item.quantity),
+          unitPrice: Number(item.unitPrice),
         })),
         paymentMethod: resolvedPayment,
         customerId: saleCustomerId,
-        discountTotal: invoiceDiscountAmount > 0 ? invoiceDiscountAmount : undefined,
+        discountTotal:
+          invoiceDiscountAmount > 0 ? Number(invoiceDiscountAmount) : undefined,
       });
       clear();
       setInvoiceDiscountPercent(0);
