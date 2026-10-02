@@ -1,4 +1,5 @@
 import { PrismaClient, UserRole, Currency } from "@prisma/client";
+import { ensureStoreRoles } from "../src/services/store-roles.js";
 
 const prisma = new PrismaClient();
 
@@ -16,6 +17,11 @@ async function main() {
     },
   });
 
+  await ensureStoreRoles(store.id);
+  const adminRole = await prisma.storeRole.findFirst({
+    where: { storeId: store.id, systemCode: UserRole.ADMIN },
+  });
+
   const admin = await prisma.user.upsert({
     where: {
       storeId_phone: {
@@ -27,12 +33,14 @@ async function main() {
       pin: "1234",
       name: "Store Admin",
       role: UserRole.ADMIN,
+      storeRoleId: adminRole?.id,
     },
     create: {
       storeId: store.id,
       phone: "0501234567",
       name: "Store Admin",
       role: UserRole.ADMIN,
+      storeRoleId: adminRole?.id,
       pin: "1234",
     },
   });

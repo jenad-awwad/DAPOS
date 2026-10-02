@@ -9,6 +9,7 @@ import {
   Select,
   SimpleGrid,
   Stack,
+  Table,
   Text,
   TextInput,
   Title,
@@ -34,7 +35,12 @@ import {
   fetchProducts,
 } from "../lib/api";
 import { formatDate, formatMoney, formatTimeOnly } from "../lib/format";
-import { calculateSalesRevenue } from "../lib/salesRevenue";
+import {
+  buildProjectScheduleMap,
+  calculateMonthlyProjectBreakdown,
+  calculateProjectPeriodMetrics,
+} from "../lib/projectMonthMetrics";
+import { calculateProductRevenue, calculateSalesRevenue } from "../lib/salesRevenue";
 import { orderPaymentState } from "../lib/orderState";
 import type { CalendarEvent, Order, OrderType } from "../lib/types";
 
@@ -62,22 +68,23 @@ function presetRange(preset: DatePreset): { from?: string; to?: string } {
   if (preset === "all" || preset === "custom") return {};
 
   const now = new Date();
-  const to = now.toISOString();
 
   if (preset === "today") {
     const from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    return { from: from.toISOString(), to };
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    return { from: from.toISOString(), to: end.toISOString() };
   }
 
   if (preset === "week") {
     const from = new Date(now);
     from.setDate(from.getDate() - 6);
     from.setHours(0, 0, 0, 0);
-    return { from: from.toISOString(), to };
+    return { from: from.toISOString(), to: now.toISOString() };
   }
 
   const from = new Date(now.getFullYear(), now.getMonth(), 1);
-  return { from: from.toISOString(), to };
+  const end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+  return { from: from.toISOString(), to: end.toISOString() };
 }
 
 function presetLabel(preset: DatePreset): string {
@@ -157,6 +164,8 @@ export function DashboardPage() {
   const ordersQuery = useQuery({
     queryKey: ["dashboard-orders", reportFilters],
     queryFn: () => fetchOrders(reportFilters),
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   const revenueOrdersFilters = useMemo(
@@ -171,6 +180,8 @@ export function DashboardPage() {
   const revenueOrdersQuery = useQuery({
     queryKey: ["dashboard-revenue-orders", revenueOrdersFilters],
     queryFn: () => fetchOrders(revenueOrdersFilters),
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   const itemSalesQuery = useQuery({
@@ -274,6 +285,11 @@ export function DashboardPage() {
     reportFilters.dateTo,
   );
   const revenue = salesRevenue.total;
+  const productRevenue = calculateProductRevenue(
+    revenueOrders,
+    reportFilters.dateFrom,
+    reportFilters.dateTo,
+  );
   const completedOrders = orders.filter((order) => order.status === "COMPLETED");
   const openPayments = orders.filter(
     (order) => orderPaymentState(order) === "OPEN",
@@ -288,7 +304,7 @@ export function DashboardPage() {
     {
       label: "Sales revenue",
       value: formatMoney(revenue, store!.currency),
-      hint: `Closed invoices ${formatMoney(salesRevenue.closedInvoices, store!.currency)} + project payments ${formatMoney(salesRevenue.projectPartialPayments, store!.currency)}`,
+      hint: `Invoices ${formatMoney(salesRevenue.invoiceTotal, store!.currency)} + project payments ${formatMoney(salesRevenue.projectPayments, store!.currency)}`,
       icon: IconCash,
       color: "green",
     },
@@ -321,7 +337,8 @@ export function DashboardPage() {
     },
     {
       label: "Product revenue",
-      value: formatMoney(itemSummary?.totalRevenue ?? 0, store!.currency),
+      value: formatMoney(productRevenue, store!.currency),
+      hint: "Regular completed invoices only",
       icon: IconTrendingUp,
       color: "green",
     },
@@ -354,12 +371,48 @@ export function DashboardPage() {
     },
   ];
 
+  const projectScheduleMap = buildProjectScheduleMap(allCalendarEvents);
+
+  const projectPeriodMetrics = calculateProjectPeriodMetrics(
+    allProjects,
+    projectScheduleMap,
+    reportFilters.dateFrom,
+    reportFilters.dateTo,
+  );
+
+  const monthlyProjectRows = calculateMonthlyProjectBreakdown(
+    allProjects,
+    projectScheduleMap,
+    6,
+  );
+
   const projectCalendarStats = [
     {
-      label: "All projects",
-      value: String(allProjects.length),
+      label: "Payments received",
+      value: formatMoney(projectPeriodMetrics.totalPayments, store!.currency),
+      hint: "All payments on projects scheduled in this period",
+      icon: IconCash,
+      color: "green",
+    },
+    {
+      label: "Total due",
+      value: formatMoney(projectPeriodMetrics.totalDue, store!.currency),
+      hint: "Open projects scheduled in this period",
+      icon: IconCash,
+      color: "orange",
+    },
+    {
+      label: "Open projects",
+      value: String(projectPeriodMetrics.openProjects),
+      hint: `${projectPeriodMetrics.scheduledProjects} scheduled in period`,
       icon: IconReceipt,
-      color: "grape",
+      color: "blue",
+    },
+    {
+      label: "Closed projects",
+      value: String(projectPeriodMetrics.closedProjects),
+      icon: IconTrendingUp,
+      color: "violet",
     },
     {
       label: "All activities",
@@ -368,14 +421,8 @@ export function DashboardPage() {
       color: "teal",
     },
     {
-      label: "Projects in next 2 days",
-      value: String(upcomingProjects.length),
-      icon: IconCalendar,
-      color: "blue",
-    },
-    {
-      label: "Activities in next 2 days",
-      value: String(upcomingActivities.length),
+      label: "Upcoming (2 days)",
+      value: String(upcomingProjects.length + upcomingActivities.length),
       icon: IconCalendar,
       color: "cyan",
     },
@@ -531,16 +578,30 @@ export function DashboardPage() {
               <Text size="xl" fw={700}>
                 {stat.value}
               </Text>
+              {"hint" in stat && stat.hint ? (
+                <Text size="xs" c="dimmed" mt={6}>
+                  {stat.hint}
+                </Text>
+              ) : null}
             </Card>
           ))}
         </SimpleGrid>
       </div>
 
       <div>
-        <Title order={4} mb="sm">
-          Projects & calendar
-        </Title>
-        <SimpleGrid cols={{ base: 1, sm: 2, lg: 4 }} spacing="md" mb="lg">
+        <Group justify="space-between" mb="sm" align="flex-end">
+          <div>
+            <Title order={4}>Projects by schedule date</Title>
+            <Text size="sm" c="dimmed">
+              Counted by calendar schedule, not creation date. Payments on a project
+              count in the month it is scheduled, including partial payments made earlier.
+            </Text>
+          </div>
+          <Button component={Link} to="/calendar" variant="light" color="green" size="xs">
+            Open calendar
+          </Button>
+        </Group>
+        <SimpleGrid cols={{ base: 1, sm: 2, lg: 3 }} spacing="md" mb="lg">
           {projectCalendarStats.map((stat) => (
             <Card key={stat.label} withBorder padding="lg" radius="md">
               <Group justify="space-between" mb="sm">
@@ -552,9 +613,51 @@ export function DashboardPage() {
               <Text size="xl" fw={700}>
                 {stat.value}
               </Text>
+              {"hint" in stat && stat.hint ? (
+                <Text size="xs" c="dimmed" mt={6}>
+                  {stat.hint}
+                </Text>
+              ) : null}
             </Card>
           ))}
         </SimpleGrid>
+
+        <Card withBorder padding="md" radius="md">
+          <Text fw={600} mb="xs">
+            Monthly project summary
+          </Text>
+          <Text size="sm" c="dimmed" mb="md">
+            Payments received during each month for projects scheduled in that same month.
+          </Text>
+          <Table striped highlightOnHover>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Month</Table.Th>
+                <Table.Th ta="right">Payments</Table.Th>
+                <Table.Th ta="right">Total due</Table.Th>
+                <Table.Th ta="right">Open</Table.Th>
+                <Table.Th ta="right">Closed</Table.Th>
+                <Table.Th ta="right">Scheduled</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {monthlyProjectRows.map((row) => (
+                <Table.Tr key={row.monthKey}>
+                  <Table.Td>{row.label}</Table.Td>
+                  <Table.Td ta="right">
+                    {formatMoney(row.totalPayments, store!.currency)}
+                  </Table.Td>
+                  <Table.Td ta="right">
+                    {formatMoney(row.totalDue, store!.currency)}
+                  </Table.Td>
+                  <Table.Td ta="right">{row.openProjects}</Table.Td>
+                  <Table.Td ta="right">{row.closedProjects}</Table.Td>
+                  <Table.Td ta="right">{row.scheduledProjects}</Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        </Card>
       </div>
 
       <div>

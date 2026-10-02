@@ -12,6 +12,7 @@ import { notifications } from "@mantine/notifications";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { recordProjectPayment } from "../lib/api";
+import { invalidateDashboardQueries } from "../lib/dashboardQueries";
 import { formatMoney, paymentLabel } from "../lib/format";
 import { projectBalanceDue, projectPaidTotal } from "../lib/projectPayments";
 import type { Order, PaymentMethod } from "../lib/types";
@@ -55,9 +56,10 @@ export function ProjectPartialPayments({
         paymentMethod: resolvedPayment,
       });
     },
-    onSuccess: (data) => {
+    onSuccess: async (data) => {
       queryClient.invalidateQueries({ queryKey: ["order", order.id] });
       queryClient.invalidateQueries({ queryKey: ["orders"] });
+      await invalidateDashboardQueries(queryClient);
       setPartialAmount("");
       onUpdated?.(data.order);
       notifications.show({ color: "green", message: "Partial payment recorded" });

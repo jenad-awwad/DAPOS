@@ -8,6 +8,7 @@ import {
   type Prisma,
 } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
+import { syncProjectOrderVendorInvoices } from "./vendors.js";
 
 type ProjectMaterialInput = {
   description: string;
@@ -305,6 +306,14 @@ export async function createOpenProject(input: CreateOpenProjectInput) {
         });
       }
 
+      await syncProjectOrderVendorInvoices(
+        tx,
+        input.storeId,
+        order.id,
+        order.orderNumber,
+        order.createdAt,
+      );
+
       return tx.order.findFirstOrThrow({
         where: { id: order.id },
         include: projectInclude,
@@ -478,6 +487,14 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
           });
         }
       }
+
+      await syncProjectOrderVendorInvoices(
+        tx,
+        input.storeId,
+        order.id,
+        order.orderNumber,
+        order.createdAt,
+      );
 
       return tx.order.findFirstOrThrow({
         where: { id: updated.id },

@@ -1,6 +1,7 @@
-import * as XLSX from "xlsx";
 import { formatDateOnly } from "./format";
+import { downloadWorkbook } from "./downloadWorkbook";
 import type { ItemSalesLine } from "./types";
+import * as XLSX from "xlsx";
 
 function formatExportMoney(amount: number) {
   return Number(amount.toFixed(2));
@@ -46,6 +47,5 @@ export function exportItemSalesToExcel(
 
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, "Items sales");
-
-  XLSX.writeFile(workbook, filename);
+  downloadWorkbook(workbook, filename);
 }

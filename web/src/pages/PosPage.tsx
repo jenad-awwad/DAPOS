@@ -22,7 +22,7 @@ import {
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { IconBarcode, IconMinus, IconPlus, IconTrash } from "@tabler/icons-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ProductCard } from "../components/ProductCard";
@@ -38,6 +38,7 @@ import {
   fetchProducts,
   upsertPosCustomer,
 } from "../lib/api";
+import { invalidateDashboardQueries } from "../lib/dashboardQueries";
 import { formatMoney, paymentLabel } from "../lib/format";
 import type { PaymentMethod } from "../lib/types";
 
@@ -47,6 +48,7 @@ const OTHER_PAYMENTS: PaymentMethod[] = ["DEBIT", "BREAKAGE", "DELIVERY"];
 
 export function PosPage() {
   const { store } = useAuth();
+  const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [posTab, setPosTab] = useState(
@@ -290,6 +292,7 @@ export function PosPage() {
         discountTotal:
           invoiceDiscountAmount > 0 ? Number(invoiceDiscountAmount) : undefined,
       });
+      await invalidateDashboardQueries(queryClient);
       clear();
       setInvoiceDiscountPercent(0);
       setLoyaltyActive(false);

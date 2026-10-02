@@ -13,6 +13,7 @@ import type {
   PermissionKey,
   Product,
   StaffUser,
+  StoreRole,
   StockMovement,
   Store,
   User,
@@ -67,6 +68,11 @@ async function request<T>(
       typeof data.error === "string"
         ? data.error
         : "Request failed";
+    if (response.status === 404 && message === "Not found") {
+      throw new Error(
+        `API route not found (${API_URL}${path}). If running locally, restart the web app and use http://localhost:5173. Production may need a backend redeploy.`,
+      );
+    }
     const details = data.details as
       | { fieldErrors?: Record<string, string[]> }
       | undefined;
@@ -309,7 +315,8 @@ export function createStaff(payload: {
   name: string;
   phone: string;
   pin: string;
-  role: UserRole;
+  role?: UserRole;
+  storeRoleId?: string;
 }) {
   return request<{ user: StaffUser }>("/users", {
     method: "POST",
@@ -324,6 +331,7 @@ export function updateStaff(
     phone: string;
     pin: string;
     role: UserRole;
+    storeRoleId: string | null;
     isActive: boolean;
     customPolicies: PermissionKey[] | null;
   }>,
@@ -339,16 +347,51 @@ export function fetchAccessCatalog() {
 }
 
 export function fetchRolePolicies() {
-  return request<{ policies: RolePoliciesMap; defaults: RolePoliciesMap }>(
-    "/access/role-policies",
-  );
+  return request<{
+    roles: StoreRole[];
+    policies: RolePoliciesMap;
+    defaults: RolePoliciesMap;
+  }>("/access/role-policies");
+}
+
+export function fetchStoreRoles() {
+  return request<{ roles: StoreRole[] }>("/access/roles");
+}
+
+export function createStoreRole(payload: {
+  name: string;
+  permissions: PermissionKey[];
+}) {
+  return request<{ role: StoreRole }>("/access/roles", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateStoreRole(
+  id: string,
+  payload: Partial<{ name: string; permissions: PermissionKey[] }>,
+) {
+  return request<{ role: StoreRole }>(`/access/roles/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteStoreRole(id: string) {
+  return request<{ ok: boolean }>(`/access/roles/${id}`, {
+    method: "DELETE",
+  });
 }
 
 export function updateRolePolicies(policies: RolePoliciesMap) {
-  return request<{ policies: RolePoliciesMap }>("/access/role-policies", {
-    method: "PATCH",
-    body: JSON.stringify(policies),
-  });
+  return request<{ roles: StoreRole[]; policies: RolePoliciesMap }>(
+    "/access/role-policies",
+    {
+      method: "PATCH",
+      body: JSON.stringify(policies),
+    },
+  );
 }
 
 export function fetchStockMovements(params?: {
@@ -583,4 +626,101 @@ export function completeCalendarEvent(id: string) {
 
 export function deleteCalendarEvent(id: string) {
   return request<{ ok: boolean }>(`/calendar/${id}`, { method: "DELETE" });
+}
+
+export type VendorOption = { id: string; name: string };
+
+export type VendorInvoiceRow = {
+  id: string;
+  vendorId: string;
+  invoiceDate: string;
+  invoiceNumber: string;
+  invoiceNumberAuto: boolean;
+  total: number;
+  attachmentKey: string | null;
+  attachmentUrl: string | null;
+  source: "MANUAL" | "PROJECT";
+  description: string | null;
+  vendor: VendorOption;
+};
+
+export type VendorPaymentRow = {
+  id: string;
+  vendorId: string;
+  paidAt: string;
+  amount: number;
+  remainingBalance: number;
+  attachmentKey: string | null;
+  attachmentUrl: string | null;
+  vendor: VendorOption;
+};
+
+export type VendorBalanceRow = {
+  vendorId: string;
+  name: string;
+  startingBalance: number;
+  invoiceTotal: number;
+  paymentTotal: number;
+  currentBalance: number;
+};
+
+export function fetchVendorOptions() {
+  return request<{ vendors: VendorOption[] }>("/vendors/options");
+}
+
+export function fetchVendorInvoices() {
+  return request<{ invoices: VendorInvoiceRow[] }>("/vendors/invoices");
+}
+
+export function fetchVendorPayments() {
+  return request<{ payments: VendorPaymentRow[] }>("/vendors/payments");
+}
+
+export function fetchVendorBalances() {
+  return request<{ balances: VendorBalanceRow[] }>("/vendors/balances");
+}
+
+export function createVendor(payload: {
+  name: string;
+  startingBalance?: number;
+}) {
+  return request<{ vendor: VendorOption & { startingBalance: number } }>(
+    "/vendors",
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export function createVendorInvoice(payload: {
+  vendorId?: string;
+  vendorName?: string;
+  invoiceDate: string;
+  invoiceNumber?: string;
+  invoiceNumberAuto?: boolean;
+  total: number;
+  attachmentKey?: string | null;
+}) {
+  return request<{ invoice: VendorInvoiceRow }>("/vendors/invoices", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createVendorPayment(payload: {
+  vendorId?: string;
+  vendorName?: string;
+  paidAt: string;
+  amount: number;
+  attachmentKey?: string | null;
+}) {
+  return request<{ payment: VendorPaymentRow }>("/vendors/payments", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function uploadVendorAttachment(imageDataUrl: string) {
+  return request<{ key: string }>("/uploads/vendor-attachment", {
+    method: "POST",
+    body: JSON.stringify({ imageDataUrl }),
+  });
 }

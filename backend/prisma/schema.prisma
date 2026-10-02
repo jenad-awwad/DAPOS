@@ -74,6 +74,11 @@ enum CalendarEventStatus {
   COMPLETED
 }
 
+enum VendorLedgerSource {
+  MANUAL
+  PROJECT
+}
+
 // ---------------------------------------------------------------------------
 // Store & staff
 // ---------------------------------------------------------------------------
@@ -91,14 +96,37 @@ model Store {
   updatedAt DateTime @updatedAt
 
   users          User[]
+  storeRoles     StoreRole[]
   categories     Category[]
   products       Product[]
   customers      Customer[]
   orders         Order[]
   stockMovements StockMovement[]
   calendarEvents CalendarEvent[]
+  vendors          Vendor[]
+  vendorInvoices   VendorInvoice[]
+  vendorPayments   VendorPayment[]
 
   @@map("stores")
+}
+
+model StoreRole {
+  id          String    @id @default(cuid())
+  storeId     String
+  name        String
+  isSystem    Boolean   @default(false)
+  systemCode  UserRole?
+  permissions Json
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  users User[]
+
+  @@unique([storeId, name])
+  @@unique([storeId, systemCode])
+  @@index([storeId])
+  @@map("store_roles")
 }
 
 model User {
@@ -107,6 +135,7 @@ model User {
   phone     String
   name      String
   role      UserRole @default(CASHIER)
+  storeRoleId String?
   pin       String   @db.VarChar(6)
   isActive  Boolean  @default(true)
   customPolicies Json?
@@ -114,6 +143,7 @@ model User {
   updatedAt DateTime @updatedAt
 
   store              Store                    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  storeRole          StoreRole?               @relation(fields: [storeRoleId], references: [id], onDelete: SetNull)
   orders             Order[]
   stockMovements     StockMovement[]
   projectAdjustments OrderProjectAdjustment[]
@@ -378,4 +408,70 @@ model StockMovement {
   @@index([storeId, productId, createdAt])
   @@index([orderId])
   @@map("stock_movements")
+}
+
+// ---------------------------------------------------------------------------
+// Vendors (AP ledger)
+// ---------------------------------------------------------------------------
+
+model Vendor {
+  id              String   @id @default(cuid())
+  storeId         String
+  name            String
+  normalizedName  String
+  startingBalance Decimal  @default(0) @db.Decimal(12, 2)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  store    Store           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  invoices VendorInvoice[]
+  payments VendorPayment[]
+
+  @@unique([storeId, normalizedName])
+  @@index([storeId])
+  @@map("vendors")
+}
+
+model VendorInvoice {
+  id                     String             @id @default(cuid())
+  storeId                String
+  vendorId               String
+  invoiceDate            DateTime
+  invoiceNumber          String
+  invoiceNumberAuto      Boolean            @default(false)
+  total                  Decimal            @db.Decimal(12, 2)
+  attachmentKey          String?
+  source                 VendorLedgerSource @default(MANUAL)
+  sourceOrderId          String?
+  orderProjectMaterialId String?            @unique
+  description            String?
+  createdById            String?
+  createdAt              DateTime           @default(now())
+
+  store  Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, invoiceDate])
+  @@index([vendorId])
+  @@index([sourceOrderId])
+  @@map("vendor_invoices")
+}
+
+model VendorPayment {
+  id               String   @id @default(cuid())
+  storeId          String
+  vendorId         String
+  paidAt           DateTime
+  amount           Decimal  @db.Decimal(12, 2)
+  remainingBalance Decimal  @db.Decimal(12, 2)
+  attachmentKey    String?
+  createdById      String?
+  createdAt        DateTime @default(now())
+
+  store  Store  @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, paidAt])
+  @@index([vendorId])
+  @@map("vendor_payments")
 }

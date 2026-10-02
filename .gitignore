@@ -1,4 +1,6 @@
-node_modules/
-.env
-*.log
-.DS_Store
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+

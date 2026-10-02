@@ -11,7 +11,8 @@ type CartContextValue = {
   items: CartItem[];
   itemCount: number;
   subtotal: number;
-  addProduct: (product: Product) => void;
+  getQuantity: (productId: string) => number;
+  addProduct: (product: Product) => boolean;
   removeProduct: (productId: string) => void;
   setQuantity: (productId: string, quantity: number) => void;
   clear: () => void;
@@ -22,11 +23,13 @@ const CartContext = createContext<CartContextValue | null>(null);
 export function CartProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([]);
 
-  const addProduct = (product: Product) => {
+  const addProduct = (product: Product): boolean => {
+    let added = false;
     setItems((current) => {
       const existing = current.find((item) => item.product.id === product.id);
       if (existing) {
         if (existing.quantity >= product.onStock) return current;
+        added = true;
         return current.map((item) =>
           item.product.id === product.id
             ? { ...item, quantity: item.quantity + 1 }
@@ -34,8 +37,10 @@ export function CartProvider({ children }: { children: ReactNode }) {
         );
       }
       if (product.onStock < 1) return current;
+      added = true;
       return [...current, { product, quantity: 1 }];
     });
+    return added;
   };
 
   const removeProduct = (productId: string) => {
@@ -64,11 +69,15 @@ export function CartProvider({ children }: { children: ReactNode }) {
     0,
   );
 
+  const getQuantity = (productId: string) =>
+    items.find((item) => item.product.id === productId)?.quantity ?? 0;
+
   const value = useMemo(
     () => ({
       items,
       itemCount,
       subtotal,
+      getQuantity,
       addProduct,
       removeProduct,
       setQuantity,

@@ -8,6 +8,11 @@ import {
   parsePermissionList,
 } from "../lib/permissions.js";
 import { serialize } from "../lib/serialize.js";
+import {
+  ensureStoreRoles,
+  getStoreRoleById,
+  syncUserRoleEnum,
+} from "../services/store-roles.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
 import { requireAdmin, requireManager } from "../middleware/roles.js";
 
@@ -19,7 +24,8 @@ const createUserSchema = z.object({
   name: z.string().min(1).max(100),
   phone: z.string().min(7).max(20),
   pin: z.string().min(4).max(6),
-  role: z.nativeEnum(UserRole),
+  role: z.nativeEnum(UserRole).optional(),
+  storeRoleId: z.string().min(1).optional(),
 });
 
 const updateUserSchema = z.object({
@@ -27,6 +33,7 @@ const updateUserSchema = z.object({
   phone: z.string().min(7).max(20).optional(),
   pin: z.string().min(4).max(6).optional(),
   role: z.nativeEnum(UserRole).optional(),
+  storeRoleId: z.string().min(1).nullable().optional(),
   isActive: z.boolean().optional(),
   customPolicies: z.array(permissionSchema).nullable().optional(),
 });
@@ -37,10 +44,12 @@ function sanitizeUser(user: {
   phone: string;
   role: UserRole;
   storeId: string;
+  storeRoleId: string | null;
   isActive: boolean;
   customPolicies?: unknown;
   createdAt: Date;
   updatedAt: Date;
+  storeRole?: { id: string; name: string; systemCode: UserRole | null } | null;
 }) {
   const customPolicies = parsePermissionList(user.customPolicies);
   return {
@@ -48,12 +57,45 @@ function sanitizeUser(user: {
     name: user.name,
     phone: user.phone,
     role: user.role,
+    storeRoleId: user.storeRoleId,
+    storeRoleName: user.storeRole?.name ?? null,
     storeId: user.storeId,
     isActive: user.isActive,
     customPolicies,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
+}
+
+async function resolveRoleAssignment(
+  storeId: string,
+  input: { role?: UserRole; storeRoleId?: string | null },
+): Promise<{ storeRoleId: string; role: UserRole }> {
+  await ensureStoreRoles(storeId);
+
+  if (input.storeRoleId) {
+    const storeRole = await getStoreRoleById(storeId, input.storeRoleId);
+    if (!storeRole) {
+      throw new Error("Role not found");
+    }
+    return {
+      storeRoleId: storeRole.id,
+      role: syncUserRoleEnum(storeRole.systemCode, storeRole.permissions),
+    };
+  }
+
+  if (input.role) {
+    const roles = await prisma.storeRole.findMany({
+      where: { storeId, systemCode: input.role },
+    });
+    const storeRole = roles[0];
+    if (!storeRole) {
+      throw new Error("Role not found");
+    }
+    return { storeRoleId: storeRole.id, role: input.role };
+  }
+
+  throw new Error("Role is required");
 }
 
 export const userRoutes = new Hono<AppEnv>();
@@ -75,6 +117,7 @@ userRoutes.get("/", requireAuth, requireManager, async (c) => {
 
   const users = await prisma.user.findMany({
     where: { storeId },
+    include: { storeRole: { select: { id: true, name: true, systemCode: true } } },
     orderBy: { name: "asc" },
   });
 
@@ -90,6 +133,10 @@ userRoutes.post("/", requireAuth, requireAdmin, async (c) => {
     return c.json({ error: "Invalid user payload", details: parsed.error.flatten() }, 400);
   }
 
+  if (!parsed.data.role && !parsed.data.storeRoleId) {
+    return c.json({ error: "Role is required" }, 400);
+  }
+
   const phone = parsed.data.phone.trim();
 
   const existing = await prisma.user.findFirst({
@@ -100,14 +147,26 @@ userRoutes.post("/", requireAuth, requireAdmin, async (c) => {
     return c.json({ error: "Phone number already in use" }, 400);
   }
 
+  let assignment: { storeRoleId: string; role: UserRole };
+  try {
+    assignment = await resolveRoleAssignment(storeId, parsed.data);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Invalid role" },
+      400,
+    );
+  }
+
   const user = await prisma.user.create({
     data: {
       storeId,
       name: parsed.data.name.trim(),
       phone,
       pin: parsed.data.pin,
-      role: parsed.data.role,
+      role: assignment.role,
+      storeRoleId: assignment.storeRoleId,
     },
+    include: { storeRole: { select: { id: true, name: true, systemCode: true } } },
   });
 
   return c.json({ user: serialize(sanitizeUser(user)) }, 201);
@@ -148,13 +207,32 @@ userRoutes.patch("/:id", requireAuth, requireAdmin, async (c) => {
     }
   }
 
+  let roleUpdate: { storeRoleId?: string; role?: UserRole } = {};
+  if (parsed.data.storeRoleId !== undefined || parsed.data.role !== undefined) {
+    try {
+      roleUpdate = await resolveRoleAssignment(storeId, {
+        storeRoleId: parsed.data.storeRoleId ?? undefined,
+        role: parsed.data.role,
+      });
+    } catch (error) {
+      return c.json(
+        { error: error instanceof Error ? error.message : "Invalid role" },
+        400,
+      );
+    }
+  }
+
   const user = await prisma.user.update({
     where: { id: existing.id },
     data: {
       ...(parsed.data.name !== undefined ? { name: parsed.data.name.trim() } : {}),
       ...(parsed.data.phone !== undefined ? { phone: parsed.data.phone.trim() } : {}),
       ...(parsed.data.pin !== undefined ? { pin: parsed.data.pin } : {}),
-      ...(parsed.data.role !== undefined ? { role: parsed.data.role } : {}),
+      ...(roleUpdate.storeRoleId !== undefined
+        ? { storeRoleId: roleUpdate.storeRoleId, role: roleUpdate.role }
+        : parsed.data.role !== undefined
+          ? { role: parsed.data.role }
+          : {}),
       ...(parsed.data.isActive !== undefined ? { isActive: parsed.data.isActive } : {}),
       ...(parsed.data.customPolicies !== undefined
         ? {
@@ -165,6 +243,7 @@ userRoutes.patch("/:id", requireAuth, requireAdmin, async (c) => {
           }
         : {}),
     },
+    include: { storeRole: { select: { id: true, name: true, systemCode: true } } },
   });
 
   return c.json({ user: serialize(sanitizeUser(user)) });

@@ -23,6 +23,9 @@ export const PERMISSION_CATALOG: PermissionDefinition[] = [
   { key: "staff.manage", label: "Manage staff", group: "Administration" },
   { key: "roles.manage", label: "Roles & policies", group: "Administration" },
   { key: "settings.manage", label: "Store settings", group: "Administration" },
+  { key: "vendors.view", label: "View vendor balances", group: "Vendors" },
+  { key: "vendors.record", label: "Record vendor invoices & payments", group: "Vendors" },
+  { key: "vendors.manage", label: "Manage vendors ledger", group: "Vendors" },
 ];
 
 export type RolePoliciesMap = Record<UserRole, PermissionKey[]>;
@@ -42,6 +45,7 @@ export const DEFAULT_ROLE_POLICIES: RolePoliciesMap = {
     "pos.sales",
     "orders.view",
     "calendar.manage",
+    "vendors.record",
   ],
 };
 
@@ -64,6 +68,7 @@ export const NAV_PERMISSIONS: Record<string, PermissionKey | PermissionKey[]> = 
   "/stock": "stock.view",
   "/admin/staff": "staff.manage",
   "/admin/roles": "roles.manage",
+  "/vendors": ["vendors.view", "vendors.record", "vendors.manage"],
   "/settings": "settings.manage",
 };
 
@@ -81,6 +86,7 @@ function roleFallback(role: UserRole, permission: PermissionKey): boolean {
   if (role === "MANAGER") {
     return !["staff.manage", "roles.manage", "settings.manage"].includes(permission);
   }
+  if (permission === "vendors.record") return true;
   return ["dashboard.view", "pos.sales", "orders.view", "calendar.manage"].includes(
     permission,
   );
@@ -91,9 +97,17 @@ export function userCanAccess(
   required: PermissionKey | PermissionKey[],
 ): boolean {
   if (!user) return false;
-  if (user.permissions?.length) {
-    return permissionMatches(user.permissions, required);
-  }
   const keys = Array.isArray(required) ? required : [required];
+  if (user.permissions?.length) {
+    if (permissionMatches(user.permissions, required)) return true;
+    const vendorKeys = keys.filter((key) => key.startsWith("vendors."));
+    const savedHasVendors = user.permissions.some((key) =>
+      key.startsWith("vendors."),
+    );
+    if (vendorKeys.length > 0 && !savedHasVendors) {
+      return vendorKeys.some((key) => roleFallback(user.role, key));
+    }
+    return false;
+  }
   return keys.some((key) => roleFallback(user.role, key));
 }

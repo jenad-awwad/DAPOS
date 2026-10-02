@@ -38,7 +38,7 @@ import {
   setProductPricing,
   updateProduct,
 } from "../lib/api";
-import { formatMoney } from "../lib/format";
+import { formatMoney, toMoney } from "../lib/format";
 import type { Product } from "../lib/types";
 
 type BasicFormValues = {
@@ -273,8 +273,8 @@ export function ProductsAdminPage() {
       onStock: product.onStock,
       categoryId: product.categoryId ?? "",
       barcode: product.barcode,
-      price: product.price,
-      cost: product.cost ?? 0,
+      price: toMoney(product.price),
+      cost: toMoney(product.cost),
       lowStockAt: product.lowStockAt ?? "",
     });
     open();
@@ -283,8 +283,8 @@ export function ProductsAdminPage() {
   const openPricingOnly = (product: Product) => {
     setPricingProduct(product);
     pricingForm.setValues({
-      price: product.price > 0 ? product.price : 0,
-      cost: product.cost ?? 0,
+      price: toMoney(product.price) > 0 ? toMoney(product.price) : 0,
+      cost: toMoney(product.cost),
     });
     openPricing();
   };
@@ -402,7 +402,7 @@ export function ProductsAdminPage() {
               <Table.Td>{product.supplier}</Table.Td>
               <Table.Td>
                 {product.isPriced
-                  ? formatMoney(product.price, store!.currency)
+                  ? formatMoney(toMoney(product.price), store!.currency)
                   : "—"}
               </Table.Td>
               <Table.Td>{product.onStock}</Table.Td>

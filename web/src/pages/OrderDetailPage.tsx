@@ -18,6 +18,7 @@ import { ProjectPartialPayments } from "../components/ProjectPartialPayments";
 import { useAuth } from "../context/AuthContext";
 import { useCanManage } from "../hooks/useRoles";
 import { fetchOrder, submitProjectOrder, voidOrder } from "../lib/api";
+import { invalidateDashboardQueries } from "../lib/dashboardQueries";
 import {
   formatDate,
   formatMoney,
@@ -41,19 +42,21 @@ export function OrderDetailPage() {
 
   const voidMutation = useMutation({
     mutationFn: () => voidOrder(id!),
-    onSuccess: () => {
+    onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: ["order", id] });
       queryClient.invalidateQueries({ queryKey: ["orders"] });
       queryClient.invalidateQueries({ queryKey: ["products"] });
+      await invalidateDashboardQueries(queryClient);
     },
   });
 
   const submitMutation = useMutation({
     mutationFn: () => submitProjectOrder(id!),
-    onSuccess: () => {
+    onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: ["order", id] });
       queryClient.invalidateQueries({ queryKey: ["orders"] });
       queryClient.invalidateQueries({ queryKey: ["calendar"] });
+      await invalidateDashboardQueries(queryClient);
       notifications.show({ color: "green", message: "Project submitted and closed" });
     },
     onError: (err) => {

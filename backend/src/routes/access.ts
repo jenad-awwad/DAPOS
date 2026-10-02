@@ -1,15 +1,22 @@
 import { Hono } from "hono";
 import { z } from "zod";
-import { prisma } from "../lib/prisma.js";
 import { serialize } from "../lib/serialize.js";
 import {
-  DEFAULT_ROLE_POLICIES,
   PERMISSION_CATALOG,
+  DEFAULT_ROLE_POLICIES,
   isPermissionKey,
   sanitizeRolePolicies,
   type PermissionKey,
   type RolePoliciesMap,
 } from "../lib/permissions.js";
+import { prisma } from "../lib/prisma.js";
+import {
+  createStoreRole,
+  deleteStoreRole,
+  ensureStoreRoles,
+  listStoreRoles,
+  updateStoreRole,
+} from "../services/store-roles.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
 import { requireAdmin } from "../middleware/roles.js";
 
@@ -23,6 +30,16 @@ const rolePoliciesSchema = z.object({
   CASHIER: z.array(permissionSchema),
 });
 
+const createRoleSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  permissions: z.array(permissionSchema),
+});
+
+const updateRoleSchema = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  permissions: z.array(permissionSchema).optional(),
+});
+
 export const accessRoutes = new Hono<AppEnv>();
 
 accessRoutes.use("*", requireAuth, requireAdmin);
@@ -31,20 +48,84 @@ accessRoutes.get("/catalog", (c) => {
   return c.json({ permissions: PERMISSION_CATALOG });
 });
 
-accessRoutes.get("/role-policies", async (c) => {
+accessRoutes.get("/roles", async (c) => {
   const auth = c.get("auth");
-  const store = await prisma.store.findFirst({
-    where: { id: auth.storeId, isActive: true },
-    select: { rolePolicies: true },
-  });
+  const roles = await listStoreRoles(auth.storeId);
+  return c.json({ roles: serialize(roles) });
+});
 
-  if (!store) {
-    return c.json({ error: "Store not found" }, 404);
+accessRoutes.post("/roles", async (c) => {
+  const auth = c.get("auth");
+  const body = await c.req.json().catch(() => null);
+  const parsed = createRoleSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return c.json({ error: "Invalid role payload", details: parsed.error.flatten() }, 400);
   }
 
-  const policies = sanitizeRolePolicies(store.rolePolicies);
+  try {
+    const role = await createStoreRole(auth.storeId, parsed.data);
+    return c.json({ role: serialize(role) }, 201);
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Could not create role" },
+      400,
+    );
+  }
+});
+
+accessRoutes.patch("/roles/:id", async (c) => {
+  const auth = c.get("auth");
+  const roleId = c.req.param("id");
+  const body = await c.req.json().catch(() => null);
+  const parsed = updateRoleSchema.safeParse(body);
+
+  if (!parsed.success) {
+    return c.json({ error: "Invalid role payload", details: parsed.error.flatten() }, 400);
+  }
+
+  try {
+    const role = await updateStoreRole(auth.storeId, roleId, parsed.data);
+    return c.json({ role: serialize(role) });
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Could not update role" },
+      400,
+    );
+  }
+});
+
+accessRoutes.delete("/roles/:id", async (c) => {
+  const auth = c.get("auth");
+  const roleId = c.req.param("id");
+
+  try {
+    await deleteStoreRole(auth.storeId, roleId);
+    return c.json({ ok: true });
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : "Could not delete role" },
+      400,
+    );
+  }
+});
+
+accessRoutes.get("/role-policies", async (c) => {
+  const auth = c.get("auth");
+  const roles = await ensureStoreRoles(auth.storeId);
+
+  const policies = roles.reduce((acc, role) => {
+    if (role.systemCode) {
+      acc[role.systemCode] = role.permissions;
+    }
+    return acc;
+  }, {} as RolePoliciesMap);
+
+  const fullPolicies = sanitizeRolePolicies(policies);
+
   return c.json({
-    policies: serialize(policies),
+    roles: serialize(roles),
+    policies: serialize(fullPolicies),
     defaults: serialize(DEFAULT_ROLE_POLICIES),
   });
 });
@@ -59,11 +140,24 @@ accessRoutes.patch("/role-policies", async (c) => {
 
   const policies: RolePoliciesMap = parsed.data;
 
-  const store = await prisma.store.update({
+  await prisma.store.update({
     where: { id: auth.storeId },
     data: { rolePolicies: policies },
-    select: { rolePolicies: true },
   });
 
-  return c.json({ policies: serialize(sanitizeRolePolicies(store.rolePolicies)) });
+  const roles = await ensureStoreRoles(auth.storeId);
+
+  for (const role of roles) {
+    if (!role.systemCode) continue;
+    const permissions = policies[role.systemCode];
+    if (!permissions) continue;
+    await updateStoreRole(auth.storeId, role.id, { permissions });
+  }
+
+  const updatedRoles = await listStoreRoles(auth.storeId);
+
+  return c.json({
+    roles: serialize(updatedRoles),
+    policies: serialize(sanitizeRolePolicies(policies)),
+  });
 });

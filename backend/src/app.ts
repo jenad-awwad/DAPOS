@@ -22,6 +22,10 @@ import { stockMovementRoutes } from "./routes/stock-movements.js";
 
 import { calendarRoutes } from "./routes/calendar.js";
 
+import { vendorRoutes } from "./routes/vendors.js";
+
+import { uploadRoutes } from "./routes/uploads.js";
+
 import type { AppEnv } from "./middleware/auth.js";
 
 
@@ -57,6 +61,10 @@ app.route("/access", accessRoutes);
 app.route("/stock-movements", stockMovementRoutes);
 
 app.route("/calendar", calendarRoutes);
+
+app.route("/vendors", vendorRoutes);
+
+app.route("/uploads", uploadRoutes);
 
 
 

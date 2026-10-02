@@ -1,7 +1,7 @@
 import { Image } from "expo-image";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import { formatMoney } from "../../lib/api";
-import type { Product } from "../../lib/types";
+import { formatMoney } from "../lib/api";
+import type { Product } from "../lib/types";
 
 type Props = {
   product: Product;

@@ -17,15 +17,28 @@ export type PermissionKey =
   | "stock.view"
   | "staff.manage"
   | "roles.manage"
-  | "settings.manage";
+  | "settings.manage"
+  | "vendors.view"
+  | "vendors.record"
+  | "vendors.manage";
 
 export type User = {
   id: string;
   name: string;
   phone: string;
   role: UserRole;
+  storeRoleId?: string | null;
+  storeRoleName?: string | null;
   storeId: string;
   permissions?: PermissionKey[];
+};
+
+export type StoreRole = {
+  id: string;
+  name: string;
+  isSystem: boolean;
+  systemCode: UserRole | null;
+  permissions: PermissionKey[];
 };
 
 export type StaffUser = User & {
@@ -218,6 +231,7 @@ export type Payment = {
   amount: number;
   reference: string | null;
   paidAt: string | null;
+  createdAt?: string;
 };
 
 export type Order = {

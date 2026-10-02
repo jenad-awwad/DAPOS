@@ -1,15 +1,22 @@
-import type { Currency } from "./types";
+import type { Currency, UserRole } from "./types";
 
-export function formatMoney(amount: number, currency: Currency | string) {
+export function formatMoney(amount: number | string, currency: Currency | string) {
+  const value = Number(amount);
+  const safe = Number.isFinite(value) ? value : 0;
   try {
     return new Intl.NumberFormat(undefined, {
       style: "currency",
       currency,
       minimumFractionDigits: 2,
-    }).format(amount);
+    }).format(safe);
   } catch {
-    return `${currency} ${amount.toFixed(2)}`;
+    return `${currency} ${safe.toFixed(2)}`;
   }
+}
+
+export function toMoney(value: unknown): number {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? amount : 0;
 }
 
 export function formatDate(value: string | null | undefined) {
@@ -82,4 +89,11 @@ export function roleLabel(role: string) {
     CASHIER: "Cashier",
   };
   return labels[role] ?? role;
+}
+
+export function storeRoleLabel(role: {
+  name: string;
+  systemCode?: UserRole | null;
+}) {
+  return role.name || (role.systemCode ? roleLabel(role.systemCode) : "Role");
 }

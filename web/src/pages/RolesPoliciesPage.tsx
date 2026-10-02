@@ -1,4 +1,5 @@
 import {
+  ActionIcon,
   Badge,
   Button,
   Checkbox,
@@ -6,40 +7,45 @@ import {
   Loader,
   Modal,
   ScrollArea,
-  SegmentedControl,
   Select,
   Stack,
   Switch,
   Table,
   Tabs,
   Text,
+  TextInput,
   Title,
+  Tooltip,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { IconDeviceFloppy, IconRefresh, IconShieldLock } from "@tabler/icons-react";
+import {
+  IconDeviceFloppy,
+  IconPlus,
+  IconRefresh,
+  IconShieldLock,
+  IconTrash,
+} from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Fragment, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useHasPermission } from "../hooks/useRoles";
 import {
+  createStoreRole,
+  deleteStoreRole,
   fetchAccessCatalog,
   fetchRolePolicies,
   fetchStaff,
-  updateRolePolicies,
   updateStaff,
+  updateStoreRole,
 } from "../lib/api";
-import { roleLabel } from "../lib/format";
+import { storeRoleLabel } from "../lib/format";
 import {
   DEFAULT_ROLE_POLICIES,
   PERMISSION_CATALOG,
-  ROLE_SELECT_DATA,
   type PermissionKey,
-  type RolePoliciesMap,
 } from "../lib/permissions";
-import type { StaffUser, UserRole } from "../lib/types";
-
-const ROLES: UserRole[] = ["ADMIN", "MANAGER", "CASHIER"];
+import type { StaffUser, StoreRole } from "../lib/types";
 
 function groupPermissions(catalog = PERMISSION_CATALOG) {
   const groups = new Map<string, typeof PERMISSION_CATALOG>();
@@ -55,12 +61,15 @@ export function RolesPoliciesPage() {
   const canManage = useHasPermission("roles.manage");
   const { refreshSession } = useAuth();
   const queryClient = useQueryClient();
-  const [policies, setPolicies] = useState<RolePoliciesMap | null>(null);
+  const [roles, setRoles] = useState<StoreRole[] | null>(null);
   const [userModalOpen, setUserModalOpen] = useState(false);
+  const [createRoleOpen, setCreateRoleOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<StaffUser | null>(null);
-  const [userRole, setUserRole] = useState<UserRole>("CASHIER");
+  const [userStoreRoleId, setUserStoreRoleId] = useState<string | null>(null);
   const [useCustomPolicies, setUseCustomPolicies] = useState(false);
   const [userPolicies, setUserPolicies] = useState<PermissionKey[]>([]);
+  const [newRoleName, setNewRoleName] = useState("");
+  const [newRolePermissions, setNewRolePermissions] = useState<PermissionKey[]>([]);
 
   const catalogQuery = useQuery({
     queryKey: ["access-catalog"],
@@ -83,13 +92,33 @@ export function RolesPoliciesPage() {
   const catalog = catalogQuery.data?.permissions ?? PERMISSION_CATALOG;
   const grouped = useMemo(() => groupPermissions(catalog), [catalog]);
 
-  const activePolicies =
-    policies ?? policiesQuery.data?.policies ?? DEFAULT_ROLE_POLICIES;
+  const activeRoles = roles ?? policiesQuery.data?.roles ?? [];
 
-  const savePoliciesMutation = useMutation({
-    mutationFn: updateRolePolicies,
-    onSuccess: (data) => {
-      setPolicies(data.policies);
+  const roleSelectData = useMemo(
+    () =>
+      activeRoles.map((role) => ({
+        value: role.id,
+        label: storeRoleLabel(role),
+      })),
+    [activeRoles],
+  );
+
+  const saveRolesMutation = useMutation({
+    mutationFn: async (nextRoles: StoreRole[]) => {
+      const serverRoles = policiesQuery.data?.roles ?? [];
+      const updates = nextRoles.filter((role) => {
+        const original = serverRoles.find((item) => item.id === role.id);
+        if (!original) return false;
+        return (
+          JSON.stringify(original.permissions) !== JSON.stringify(role.permissions)
+        );
+      });
+
+      for (const role of updates) {
+        await updateStoreRole(role.id, { permissions: role.permissions });
+      }
+    },
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["role-policies"] });
       refreshSession();
       notifications.show({ color: "green", message: "Role policies saved" });
@@ -98,9 +127,37 @@ export function RolesPoliciesPage() {
       notifications.show({ color: "red", message: err.message }),
   });
 
+  const createRoleMutation = useMutation({
+    mutationFn: createStoreRole,
+    onSuccess: (data) => {
+      setRoles((current) => [...(current ?? activeRoles), data.role]);
+      queryClient.invalidateQueries({ queryKey: ["role-policies"] });
+      refreshSession();
+      notifications.show({ color: "green", message: "Role created" });
+      setCreateRoleOpen(false);
+      setNewRoleName("");
+      setNewRolePermissions([]);
+    },
+    onError: (err: Error) =>
+      notifications.show({ color: "red", message: err.message }),
+  });
+
+  const deleteRoleMutation = useMutation({
+    mutationFn: deleteStoreRole,
+    onSuccess: (_data, roleId) => {
+      setRoles((current) => (current ?? activeRoles).filter((role) => role.id !== roleId));
+      queryClient.invalidateQueries({ queryKey: ["role-policies"] });
+      queryClient.invalidateQueries({ queryKey: ["staff"] });
+      refreshSession();
+      notifications.show({ color: "green", message: "Role deleted" });
+    },
+    onError: (err: Error) =>
+      notifications.show({ color: "red", message: err.message }),
+  });
+
   const roleMutation = useMutation({
-    mutationFn: ({ id, role }: { id: string; role: UserRole }) =>
-      updateStaff(id, { role }),
+    mutationFn: ({ id, storeRoleId }: { id: string; storeRoleId: string }) =>
+      updateStaff(id, { storeRoleId }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["staff"] });
       refreshSession();
@@ -112,9 +169,9 @@ export function RolesPoliciesPage() {
 
   const saveUserMutation = useMutation({
     mutationFn: async () => {
-      if (!editingUser) return;
+      if (!editingUser || !userStoreRoleId) return;
       return updateStaff(editingUser.id, {
-        role: userRole,
+        storeRoleId: userStoreRoleId,
         customPolicies: useCustomPolicies ? userPolicies : null,
       });
     },
@@ -129,27 +186,39 @@ export function RolesPoliciesPage() {
       notifications.show({ color: "red", message: err.message }),
   });
 
-  function toggleRolePermission(role: UserRole, key: PermissionKey, checked: boolean) {
-    const current = new Set(activePolicies[role]);
-    if (checked) current.add(key);
-    else current.delete(key);
-    setPolicies({
-      ...activePolicies,
-      [role]: [...current],
-    });
+  function toggleRolePermission(roleId: string, key: PermissionKey, checked: boolean) {
+    setRoles(
+      (current ?? activeRoles).map((role) => {
+        if (role.id !== roleId) return role;
+        const permissions = new Set(role.permissions);
+        if (checked) permissions.add(key);
+        else permissions.delete(key);
+        return { ...role, permissions: [...permissions] };
+      }),
+    );
   }
 
   function openUserModal(user: StaffUser) {
     setEditingUser(user);
-    setUserRole(user.role);
+    const roleId = user.storeRoleId ?? activeRoles.find((r) => r.systemCode === user.role)?.id ?? null;
+    setUserStoreRoleId(roleId);
     const hasCustom = Boolean(user.customPolicies?.length);
     setUseCustomPolicies(hasCustom);
-    setUserPolicies(
-      hasCustom
-        ? user.customPolicies!
-        : activePolicies[user.role],
-    );
+    const rolePermissions =
+      activeRoles.find((role) => role.id === roleId)?.permissions ?? [];
+    setUserPolicies(hasCustom ? user.customPolicies! : rolePermissions);
     setUserModalOpen(true);
+  }
+
+  function resetSystemRolesToDefaults() {
+    const defaults = policiesQuery.data?.defaults ?? DEFAULT_ROLE_POLICIES;
+    setRoles(
+      activeRoles.map((role) =>
+        role.systemCode
+          ? { ...role, permissions: defaults[role.systemCode] ?? role.permissions }
+          : role,
+      ),
+    );
   }
 
   if (!canManage) return <Navigate to="/" replace />;
@@ -166,9 +235,16 @@ export function RolesPoliciesPage() {
             <Title order={2}>Roles & policies</Title>
           </Group>
           <Text c="dimmed">
-            Control what each role and user can access in the system
+            Manage built-in and custom roles, then assign them to users
           </Text>
         </div>
+        <Button
+          color="green"
+          leftSection={<IconPlus size={16} />}
+          onClick={() => setCreateRoleOpen(true)}
+        >
+          Add role
+        </Button>
       </Group>
 
       <Tabs defaultValue="roles" color="green">
@@ -181,27 +257,23 @@ export function RolesPoliciesPage() {
           <Stack gap="md">
             <Group justify="space-between">
               <Text size="sm" c="dimmed">
-                Permissions apply to all users with that role unless they have custom
-                policies.
+                Built-in roles cannot be deleted. Custom roles can be removed when
+                no users are assigned.
               </Text>
               <Group>
                 <Button
                   variant="light"
                   color="gray"
                   leftSection={<IconRefresh size={16} />}
-                  onClick={() => {
-                    if (policiesQuery.data?.defaults) {
-                      setPolicies(policiesQuery.data.defaults);
-                    }
-                  }}
+                  onClick={resetSystemRolesToDefaults}
                 >
-                  Reset to defaults
+                  Reset system roles
                 </Button>
                 <Button
                   color="green"
                   leftSection={<IconDeviceFloppy size={16} />}
-                  loading={savePoliciesMutation.isPending}
-                  onClick={() => savePoliciesMutation.mutate(activePolicies)}
+                  loading={saveRolesMutation.isPending}
+                  onClick={() => saveRolesMutation.mutate(activeRoles)}
                 >
                   Save role policies
                 </Button>
@@ -213,9 +285,33 @@ export function RolesPoliciesPage() {
                 <Table.Thead>
                   <Table.Tr>
                     <Table.Th w={280}>Permission</Table.Th>
-                    {ROLES.map((role) => (
-                      <Table.Th key={role} ta="center">
-                        {roleLabel(role)}
+                    {activeRoles.map((role) => (
+                      <Table.Th key={role.id} ta="center">
+                        <Stack gap={4} align="center">
+                          <Text size="sm" fw={600}>
+                            {storeRoleLabel(role)}
+                          </Text>
+                          {role.isSystem ? (
+                            <Badge size="xs" variant="light" color="gray">
+                              System
+                            </Badge>
+                          ) : (
+                            <Tooltip label="Delete role">
+                              <ActionIcon
+                                size="sm"
+                                color="red"
+                                variant="subtle"
+                                loading={
+                                  deleteRoleMutation.isPending &&
+                                  deleteRoleMutation.variables === role.id
+                                }
+                                onClick={() => deleteRoleMutation.mutate(role.id)}
+                              >
+                                <IconTrash size={14} />
+                              </ActionIcon>
+                            </Tooltip>
+                          )}
+                        </Stack>
                       </Table.Th>
                     ))}
                   </Table.Tr>
@@ -224,7 +320,7 @@ export function RolesPoliciesPage() {
                   {grouped.map(([group, items]) => (
                     <Fragment key={group}>
                       <Table.Tr>
-                        <Table.Td colSpan={4}>
+                        <Table.Td colSpan={activeRoles.length + 1}>
                           <Text fw={600} size="sm">
                             {group}
                           </Text>
@@ -238,21 +334,19 @@ export function RolesPoliciesPage() {
                               {item.key}
                             </Text>
                           </Table.Td>
-                          {ROLES.map((role) => (
-                            <Table.Td key={`${item.key}-${role}`} ta="center">
+                          {activeRoles.map((role) => (
+                            <Table.Td key={`${item.key}-${role.id}`} ta="center">
                               <Checkbox
                                 color="green"
-                                checked={
-                                  activePolicies?.[role]?.includes(item.key) ?? false
-                                }
+                                checked={role.permissions.includes(item.key)}
                                 onChange={(e) =>
                                   toggleRolePermission(
-                                    role,
+                                    role.id,
                                     item.key,
                                     e.currentTarget.checked,
                                   )
                                 }
-                                aria-label={`${item.label} for ${roleLabel(role)}`}
+                                aria-label={`${item.label} for ${storeRoleLabel(role)}`}
                               />
                             </Table.Td>
                           ))}
@@ -283,21 +377,18 @@ export function RolesPoliciesPage() {
                   <Table.Td>{user.name}</Table.Td>
                   <Table.Td>
                     <Select
-                      w={170}
+                      w={190}
                       size="xs"
                       allowDeselect={false}
                       comboboxProps={{ withinPortal: true, zIndex: 1000 }}
-                      data={ROLE_SELECT_DATA}
-                      value={user.role}
+                      data={roleSelectData}
+                      value={user.storeRoleId ?? roleSelectData.find((r) => r.label.includes(user.role))?.value ?? null}
                       disabled={
                         roleMutation.isPending && roleMutation.variables?.id === user.id
                       }
                       onChange={(value) => {
-                        if (!value || value === user.role) return;
-                        roleMutation.mutate({
-                          id: user.id,
-                          role: value as UserRole,
-                        });
+                        if (!value || value === user.storeRoleId) return;
+                        roleMutation.mutate({ id: user.id, storeRoleId: value });
                       }}
                     />
                   </Table.Td>
@@ -335,6 +426,73 @@ export function RolesPoliciesPage() {
       </Tabs>
 
       <Modal
+        opened={createRoleOpen}
+        onClose={() => setCreateRoleOpen(false)}
+        title="Create role"
+        size="lg"
+        zIndex={300}
+      >
+        <Stack gap="md">
+          <TextInput
+            label="Role name"
+            placeholder="e.g. Supervisor, Warehouse lead"
+            value={newRoleName}
+            onChange={(e) => setNewRoleName(e.currentTarget.value)}
+          />
+          <Text size="sm" fw={500}>
+            Permissions
+          </Text>
+          <ScrollArea h={280}>
+            <Stack gap="sm">
+              {grouped.map(([group, items]) => (
+                <div key={group}>
+                  <Text fw={600} size="sm" mb={4}>
+                    {group}
+                  </Text>
+                  <Stack gap={6}>
+                    {items.map((item) => (
+                      <Checkbox
+                        key={item.key}
+                        label={item.label}
+                        color="green"
+                        checked={newRolePermissions.includes(item.key)}
+                        onChange={(e) => {
+                          const checked = e.currentTarget.checked;
+                          setNewRolePermissions((prev) =>
+                            checked
+                              ? [...prev, item.key]
+                              : prev.filter((key) => key !== item.key),
+                          );
+                        }}
+                      />
+                    ))}
+                  </Stack>
+                </div>
+              ))}
+            </Stack>
+          </ScrollArea>
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setCreateRoleOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              color="green"
+              loading={createRoleMutation.isPending}
+              disabled={!newRoleName.trim()}
+              onClick={() =>
+                createRoleMutation.mutate({
+                  name: newRoleName.trim(),
+                  permissions: newRolePermissions,
+                })
+              }
+            >
+              Create role
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+
+      <Modal
         opened={userModalOpen}
         onClose={() => setUserModalOpen(false)}
         title={editingUser ? `Access for ${editingUser.name}` : "User access"}
@@ -346,16 +504,17 @@ export function RolesPoliciesPage() {
             <Text size="sm" fw={500} mb={6}>
               Role
             </Text>
-            <SegmentedControl
-              fullWidth
-              color="green"
-              value={userRole}
-              data={ROLE_SELECT_DATA}
+            <Select
+              allowDeselect={false}
+              comboboxProps={{ withinPortal: true, zIndex: 310 }}
+              data={roleSelectData}
+              value={userStoreRoleId}
               onChange={(value) => {
-                const role = value as UserRole;
-                setUserRole(role);
+                if (!value) return;
+                setUserStoreRoleId(value);
                 if (!useCustomPolicies) {
-                  setUserPolicies(activePolicies[role]);
+                  const role = activeRoles.find((item) => item.id === value);
+                  setUserPolicies(role?.permissions ?? []);
                 }
               }}
             />
@@ -368,8 +527,9 @@ export function RolesPoliciesPage() {
             onChange={(e) => {
               const enabled = e.currentTarget.checked;
               setUseCustomPolicies(enabled);
-              if (!enabled) {
-                setUserPolicies(activePolicies[userRole]);
+              if (!enabled && userStoreRoleId) {
+                const role = activeRoles.find((item) => item.id === userStoreRoleId);
+                setUserPolicies(role?.permissions ?? []);
               }
             }}
           />
@@ -406,8 +566,16 @@ export function RolesPoliciesPage() {
             </ScrollArea>
           ) : (
             <Text size="sm" c="dimmed">
-              This user will use the {roleLabel(userRole)} role policies (
-              {activePolicies[userRole]?.length ?? 0} permissions).
+              This user will use the{" "}
+              {storeRoleLabel(
+                activeRoles.find((role) => role.id === userStoreRoleId) ?? {
+                  name: "selected role",
+                },
+              )}{" "}
+              permissions (
+              {activeRoles.find((role) => role.id === userStoreRoleId)?.permissions.length ??
+                0}{" "}
+              permissions).
             </Text>
           )}
 

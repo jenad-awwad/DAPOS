@@ -25,6 +25,7 @@ import {
   IconShoppingCart,
   IconUsers,
   IconHistory,
+  IconBuildingStore,
 } from "@tabler/icons-react";
 import { NavLink as RouterNavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
@@ -49,6 +50,7 @@ const allLinks: NavItem[] = [
   { to: "/admin/products", label: "Products", icon: IconPackage, permission: NAV_PERMISSIONS["/admin/products"] },
   { to: "/admin/categories", label: "Categories", icon: IconCategory, permission: NAV_PERMISSIONS["/admin/categories"] },
   { to: "/customers", label: "Customers", icon: IconUsers, permission: NAV_PERMISSIONS["/customers"] },
+  { to: "/vendors", label: "Vendors", icon: IconBuildingStore, always: true },
   { to: "/stock", label: "Stock history", icon: IconHistory, permission: NAV_PERMISSIONS["/stock"] },
   { to: "/admin/staff", label: "Staff", icon: IconUsers, permission: NAV_PERMISSIONS["/admin/staff"] },
   { to: "/admin/roles", label: "Roles & policies", icon: IconShieldLock, permission: NAV_PERMISSIONS["/admin/roles"] },

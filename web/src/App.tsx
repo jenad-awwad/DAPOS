@@ -14,6 +14,7 @@ import { ProductDetailPage } from "./pages/ProductDetailPage";
 import { ProductsAdminPage } from "./pages/ProductsAdminPage";
 import { RolesPoliciesPage } from "./pages/RolesPoliciesPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { VendorsPage } from "./pages/VendorsPage";
 import { StaffPage } from "./pages/StaffPage";
 import { StockPage } from "./pages/StockPage";
 
@@ -37,6 +38,7 @@ export default function App() {
             <Route path="admin/products" element={<ProductsAdminPage />} />
             <Route path="admin/categories" element={<CategoriesAdminPage />} />
             <Route path="customers" element={<CustomersPage />} />
+            <Route path="vendors" element={<VendorsPage />} />
             <Route path="stock" element={<StockPage />} />
             <Route path="admin/staff" element={<StaffPage />} />
             <Route path="admin/roles" element={<RolesPoliciesPage />} />

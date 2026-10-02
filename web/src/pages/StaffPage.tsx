@@ -18,12 +18,12 @@ import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
 import { IconEdit, IconPlus } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { useHasPermission } from "../hooks/useRoles";
-import { createStaff, fetchStaff, updateStaff } from "../lib/api";
-import { roleLabel } from "../lib/format";
-import type { StaffUser, UserRole } from "../lib/types";
+import { createStaff, fetchRolePolicies, fetchStaff, updateStaff } from "../lib/api";
+import { storeRoleLabel } from "../lib/format";
+import type { StaffUser } from "../lib/types";
 
 export function StaffPage() {
   const canManageStaff = useHasPermission("staff.manage");
@@ -37,12 +37,32 @@ export function StaffPage() {
     enabled: canManageStaff,
   });
 
+  const rolesQuery = useQuery({
+    queryKey: ["role-policies"],
+    queryFn: fetchRolePolicies,
+    enabled: canManageStaff,
+  });
+
+  const roleOptions = useMemo(
+    () =>
+      (rolesQuery.data?.roles ?? []).map((role) => ({
+        value: role.id,
+        label: storeRoleLabel(role),
+      })),
+    [rolesQuery.data?.roles],
+  );
+
+  const defaultRoleId =
+    rolesQuery.data?.roles.find((role) => role.systemCode === "CASHIER")?.id ??
+    roleOptions[0]?.value ??
+    "";
+
   const form = useForm({
     initialValues: {
       name: "",
       phone: "",
       pin: "",
-      role: "CASHIER" as UserRole,
+      storeRoleId: defaultRoleId,
       isActive: true,
     },
   });
@@ -54,7 +74,7 @@ export function StaffPage() {
           name: values.name,
           phone: values.phone,
           ...(values.pin ? { pin: values.pin } : {}),
-          role: values.role,
+          storeRoleId: values.storeRoleId,
           isActive: values.isActive,
         });
       }
@@ -62,7 +82,7 @@ export function StaffPage() {
         name: values.name,
         phone: values.phone,
         pin: values.pin,
-        role: values.role,
+        storeRoleId: values.storeRoleId,
       });
     },
     onSuccess: () => {
@@ -76,7 +96,7 @@ export function StaffPage() {
   });
 
   if (!canManageStaff) return <Navigate to="/" replace />;
-  if (isLoading) return <Loader color="green" />;
+  if (isLoading || rolesQuery.isLoading) return <Loader color="green" />;
 
   return (
     <Stack gap="lg">
@@ -94,7 +114,7 @@ export function StaffPage() {
               name: "",
               phone: "",
               pin: "",
-              role: "CASHIER",
+              storeRoleId: defaultRoleId,
               isActive: true,
             });
             open();
@@ -119,7 +139,7 @@ export function StaffPage() {
             <Table.Tr key={user.id}>
               <Table.Td>{user.name}</Table.Td>
               <Table.Td>{user.phone}</Table.Td>
-              <Table.Td>{roleLabel(user.role)}</Table.Td>
+              <Table.Td>{user.storeRoleName ?? storeRoleLabel({ name: user.role })}</Table.Td>
               <Table.Td>
                 <Badge color={user.isActive ? "green" : "red"} variant="light">
                   {user.isActive ? "Active" : "Inactive"}
@@ -134,7 +154,11 @@ export function StaffPage() {
                       name: user.name,
                       phone: user.phone,
                       pin: "",
-                      role: user.role,
+                      storeRoleId:
+                        user.storeRoleId ??
+                        rolesQuery.data?.roles.find((role) => role.systemCode === user.role)
+                          ?.id ??
+                        defaultRoleId,
                       isActive: user.isActive,
                     });
                     open();
@@ -160,12 +184,10 @@ export function StaffPage() {
             />
             <Select
               label="Role"
-              data={[
-                { value: "CASHIER", label: "Cashier" },
-                { value: "MANAGER", label: "Manager" },
-                { value: "ADMIN", label: "Administrator" },
-              ]}
-              {...form.getInputProps("role")}
+              allowDeselect={false}
+              comboboxProps={{ withinPortal: true, zIndex: 1000 }}
+              data={roleOptions}
+              {...form.getInputProps("storeRoleId")}
             />
             {editing ? (
               <Switch label="Active" {...form.getInputProps("isActive", { type: "checkbox" })} />
