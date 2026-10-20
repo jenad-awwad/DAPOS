@@ -2,9 +2,12 @@ import { Hono } from "hono";
 import { CalendarEventType, OrderStatus, OrderType, PaymentMethod } from "@prisma/client";
 import { z } from "zod";
 import { zDateTimeString } from "../lib/datetime.js";
+import { withAttachmentUrl } from "../lib/object-storage.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
-import { requireManager } from "../middleware/roles.js";
+import { loadUserPermissions, requireAnyPermission } from "../middleware/permissions.js";
+import { userHasPermission, type PermissionKey } from "../lib/permissions.js";
+import { prisma } from "../lib/prisma.js";
 import { voidOrder } from "../services/order-actions.js";
 import { createSale, getOrder, getItemSalesReport, listOrders } from "../services/orders.js";
 import {
@@ -50,6 +53,7 @@ const createProjectOrderSchema = z.object({
   customerName: z.string().trim().min(1).optional(),
   customerPhone: z.string().trim().min(1).optional(),
   notes: z.string().optional(),
+  attachmentKey: z.string().trim().min(1).nullable().optional(),
   discountTotal: z.number().min(0).optional(),
   scheduleAt: zDateTimeString.optional(),
   scheduleType: z.nativeEnum(CalendarEventType).optional(),
@@ -85,10 +89,87 @@ const itemSalesQuerySchema = z.object({
   dateTo: z.string().datetime().optional(),
 });
 
+async function presentOrder<T extends { attachmentKey?: string | null }>(
+  order: T,
+  requestUrl: string,
+) {
+  return serialize(await withAttachmentUrl(order, requestUrl));
+}
+
+async function presentOrders<T extends { attachmentKey?: string | null }>(
+  orders: T[],
+  requestUrl: string,
+) {
+  return serialize(
+    await Promise.all(orders.map((order) => withAttachmentUrl(order, requestUrl))),
+  );
+}
+
+const OTHER_PAYMENTS: PaymentMethod[] = [
+  PaymentMethod.DEBIT,
+  PaymentMethod.BREAKAGE,
+  PaymentMethod.DELIVERY,
+];
+
+async function saleFeatureDenial(
+  storeId: string,
+  permissions: PermissionKey[],
+  data: {
+    items: { productId: string; unitPrice?: number; discount?: number }[];
+    discountTotal?: number;
+    paymentMethod: PaymentMethod;
+    customerId?: string;
+  },
+): Promise<string | null> {
+  const hasDiscount =
+    (data.discountTotal ?? 0) > 0 || data.items.some((item) => (item.discount ?? 0) > 0);
+  if (hasDiscount && !userHasPermission(permissions, "pos.discount")) {
+    return "Invoice discounts are not allowed for this role";
+  }
+
+  if (
+    OTHER_PAYMENTS.includes(data.paymentMethod) &&
+    !userHasPermission(permissions, "pos.payments.other")
+  ) {
+    return "This payment method is not allowed for this role";
+  }
+
+  if (
+    data.customerId &&
+    data.paymentMethod !== PaymentMethod.DEBIT &&
+    !userHasPermission(permissions, "pos.loyalty")
+  ) {
+    return "Loyalty sales are not allowed for this role";
+  }
+
+  if (!userHasPermission(permissions, "pos.price")) {
+    const products = await prisma.product.findMany({
+      where: { storeId, id: { in: data.items.map((item) => item.productId) } },
+      select: { id: true, price: true },
+    });
+    const prices = new Map(products.map((product) => [product.id, Number(product.price)]));
+    for (const item of data.items) {
+      if (item.unitPrice === undefined) continue;
+      const catalog = prices.get(item.productId);
+      if (catalog == null) continue;
+      if (Math.round(item.unitPrice * 100) !== Math.round(catalog * 100)) {
+        return "Changing the selling price is not allowed for this role";
+      }
+    }
+  }
+
+  return null;
+}
+
 export const orderRoutes = new Hono<AppEnv>();
 
 orderRoutes.get("/reports/item-sales", requireAuth, async (c) => {
-  const { storeId } = c.get("auth");
+  const auth = c.get("auth");
+  const permissions = await loadUserPermissions(auth.storeId, auth.sub);
+  if (!userHasPermission(permissions, "orders.items")) {
+    return c.json({ error: "You do not have permission to view item sales" }, 403);
+  }
+  const { storeId } = auth;
   const parsed = itemSalesQuerySchema.safeParse({
     search: c.req.query("search"),
     cashierId: c.req.query("cashierId"),
@@ -111,7 +192,15 @@ orderRoutes.get("/reports/item-sales", requireAuth, async (c) => {
 });
 
 orderRoutes.get("/", requireAuth, async (c) => {
-  const { storeId } = c.get("auth");
+  const auth = c.get("auth");
+  const permissions = await loadUserPermissions(auth.storeId, auth.sub);
+  const canViewOrders = userHasPermission(permissions, "orders.view");
+  const canOpenProjects = userHasPermission(permissions, "pos.projects");
+
+  if (!canViewOrders && !canOpenProjects) {
+    return c.json({ error: "You do not have permission to view orders" }, 403);
+  }
+
   const parsed = listOrdersQuerySchema.safeParse({
     limit: c.req.query("limit"),
     orderNumber: c.req.query("orderNumber"),
@@ -127,25 +216,25 @@ orderRoutes.get("/", requireAuth, async (c) => {
     return c.json({ error: "Invalid order filters", details: parsed.error.flatten() }, 400);
   }
 
-  const orders = await listOrders(storeId, {
+  const orders = await listOrders(auth.storeId, {
     limit: parsed.data.limit ?? 100,
     orderNumber: parsed.data.orderNumber,
     status: parsed.data.status,
-    orderType: parsed.data.orderType,
+    orderType: canViewOrders ? parsed.data.orderType : OrderType.PROJECT,
     paymentOpen: parsed.data.paymentOpen,
     cashierId: parsed.data.cashierId,
     dateFrom: parsed.data.dateFrom ? new Date(parsed.data.dateFrom) : undefined,
     dateTo: parsed.data.dateTo ? new Date(parsed.data.dateTo) : undefined,
   });
-  return c.json({ orders: serialize(orders) });
+  return c.json({ orders: await presentOrders(orders, c.req.url) });
 });
 
-orderRoutes.post("/:id/void", requireAuth, requireManager, async (c) => {
+orderRoutes.post("/:id/void", requireAuth, requireAnyPermission("orders.void"), async (c) => {
   const auth = c.get("auth");
 
   try {
     const order = await voidOrder(auth.storeId, c.req.param("id"), auth.sub);
-    return c.json({ order: serialize(order) });
+    return c.json({ order: await presentOrder(order, c.req.url) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not void order";
     return c.json({ error: message }, 400);
@@ -153,17 +242,32 @@ orderRoutes.post("/:id/void", requireAuth, requireManager, async (c) => {
 });
 
 orderRoutes.get("/:id", requireAuth, async (c) => {
-  const { storeId } = c.get("auth");
-  const order = await getOrder(storeId, c.req.param("id"));
+  const auth = c.get("auth");
+  const order = await getOrder(auth.storeId, c.req.param("id"));
 
   if (!order) {
     return c.json({ error: "Order not found" }, 404);
   }
 
-  return c.json({ order: serialize(order) });
+  const permissions = await loadUserPermissions(auth.storeId, auth.sub);
+  const canViewOrders = userHasPermission(permissions, "orders.view");
+  const canOpenProjects = userHasPermission(permissions, "pos.projects");
+
+  if (order.orderType === OrderType.PROJECT) {
+    if (!canViewOrders && !canOpenProjects) {
+      return c.json(
+        { error: "You do not have permission to open this project" },
+        403,
+      );
+    }
+  } else if (!canViewOrders) {
+    return c.json({ error: "You do not have permission to view this order" }, 403);
+  }
+
+  return c.json({ order: await presentOrder(order, c.req.url) });
 });
 
-orderRoutes.post("/project", requireAuth, async (c) => {
+orderRoutes.post("/project", requireAuth, requireAnyPermission("pos.projects"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = createProjectOrderSchema.safeParse(body);
@@ -187,6 +291,7 @@ orderRoutes.post("/project", requireAuth, async (c) => {
       customerName: parsed.data.customerName,
       customerPhone: parsed.data.customerPhone,
       notes: parsed.data.notes,
+      attachmentKey: parsed.data.attachmentKey,
       discountTotal: parsed.data.discountTotal,
       scheduleAt: parsed.data.scheduleAt
         ? new Date(parsed.data.scheduleAt)
@@ -194,7 +299,7 @@ orderRoutes.post("/project", requireAuth, async (c) => {
       scheduleType: parsed.data.scheduleType,
     });
 
-    return c.json({ order: serialize(order) }, 201);
+    return c.json({ order: await presentOrder(order, c.req.url) }, 201);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Could not create project order";
@@ -202,7 +307,7 @@ orderRoutes.post("/project", requireAuth, async (c) => {
   }
 });
 
-orderRoutes.patch("/:id/project", requireAuth, async (c) => {
+orderRoutes.patch("/:id/project", requireAuth, requireAnyPermission("pos.projects"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = updateProjectOrderSchema.safeParse(body);
@@ -227,6 +332,7 @@ orderRoutes.patch("/:id/project", requireAuth, async (c) => {
       customerName: parsed.data.customerName,
       customerPhone: parsed.data.customerPhone,
       notes: parsed.data.notes,
+      attachmentKey: parsed.data.attachmentKey,
       discountTotal: parsed.data.discountTotal,
       scheduleAt: parsed.data.scheduleAt
         ? new Date(parsed.data.scheduleAt)
@@ -234,7 +340,7 @@ orderRoutes.patch("/:id/project", requireAuth, async (c) => {
       scheduleType: parsed.data.scheduleType,
     });
 
-    return c.json({ order: serialize(order) });
+    return c.json({ order: await presentOrder(order, c.req.url) });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Could not update project order";
@@ -242,7 +348,7 @@ orderRoutes.patch("/:id/project", requireAuth, async (c) => {
   }
 });
 
-orderRoutes.post("/:id/project/payments", requireAuth, async (c) => {
+orderRoutes.post("/:id/project/payments", requireAuth, requireAnyPermission("pos.projects"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = recordProjectPaymentSchema.safeParse(body);
@@ -263,7 +369,7 @@ orderRoutes.post("/:id/project/payments", requireAuth, async (c) => {
       paymentMethod: parsed.data.paymentMethod,
     });
 
-    return c.json({ order: serialize(order) }, 201);
+    return c.json({ order: await presentOrder(order, c.req.url) }, 201);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Could not record partial payment";
@@ -271,7 +377,7 @@ orderRoutes.post("/:id/project/payments", requireAuth, async (c) => {
   }
 });
 
-orderRoutes.post("/:id/project/submit", requireAuth, async (c) => {
+orderRoutes.post("/:id/project/submit", requireAuth, requireAnyPermission("pos.projects"), async (c) => {
   const auth = c.get("auth");
 
   try {
@@ -281,7 +387,7 @@ orderRoutes.post("/:id/project/submit", requireAuth, async (c) => {
       cashierId: auth.sub,
     });
 
-    return c.json({ order: serialize(order) });
+    return c.json({ order: await presentOrder(order, c.req.url) });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Could not submit project order";
@@ -289,13 +395,19 @@ orderRoutes.post("/:id/project/submit", requireAuth, async (c) => {
   }
 });
 
-orderRoutes.post("/", requireAuth, async (c) => {
+orderRoutes.post("/", requireAuth, requireAnyPermission("pos.sales"), async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = createOrderSchema.safeParse(body);
 
   if (!parsed.success) {
     return c.json({ error: "Invalid order payload", details: parsed.error.flatten() }, 400);
+  }
+
+  const permissions = await loadUserPermissions(auth.storeId, auth.sub);
+  const denied = await saleFeatureDenial(auth.storeId, permissions, parsed.data);
+  if (denied) {
+    return c.json({ error: denied }, 403);
   }
 
   try {
@@ -309,7 +421,7 @@ orderRoutes.post("/", requireAuth, async (c) => {
       discountTotal: parsed.data.discountTotal,
     });
 
-    return c.json({ order: serialize(order) }, 201);
+    return c.json({ order: await presentOrder(order, c.req.url) }, 201);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not create order";
     return c.json({ error: message }, 400);

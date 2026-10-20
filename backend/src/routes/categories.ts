@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
-import { requireManager } from "../middleware/roles.js";
+import { requireAnyPermission } from "../middleware/permissions.js";
 
 const createCategorySchema = z.object({
   name: z.string().min(1).max(100),
@@ -29,7 +29,11 @@ categoryRoutes.get("/", requireAuth, async (c) => {
   return c.json({ categories: serialize(categories) });
 });
 
-categoryRoutes.get("/all", requireAuth, requireManager, async (c) => {
+categoryRoutes.get(
+  "/all",
+  requireAuth,
+  requireAnyPermission("categories.view", "categories.manage"),
+  async (c) => {
   const { storeId } = c.get("auth");
 
   const categories = await prisma.category.findMany({
@@ -41,7 +45,7 @@ categoryRoutes.get("/all", requireAuth, requireManager, async (c) => {
   return c.json({ categories: serialize(categories) });
 });
 
-categoryRoutes.post("/", requireAuth, requireManager, async (c) => {
+categoryRoutes.post("/", requireAuth, requireAnyPermission("categories.manage"), async (c) => {
   const { storeId } = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = createCategorySchema.safeParse(body);
@@ -64,7 +68,7 @@ categoryRoutes.post("/", requireAuth, requireManager, async (c) => {
   }
 });
 
-categoryRoutes.patch("/:id", requireAuth, requireManager, async (c) => {
+categoryRoutes.patch("/:id", requireAuth, requireAnyPermission("categories.manage"), async (c) => {
   const { storeId } = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = updateCategorySchema.safeParse(body);
@@ -96,7 +100,7 @@ categoryRoutes.patch("/:id", requireAuth, requireManager, async (c) => {
   }
 });
 
-categoryRoutes.delete("/:id", requireAuth, requireManager, async (c) => {
+categoryRoutes.delete("/:id", requireAuth, requireAnyPermission("categories.manage"), async (c) => {
   const { storeId } = c.get("auth");
 
   const existing = await prisma.category.findFirst({

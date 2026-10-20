@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
-import { requireManager } from "../middleware/roles.js";
+import { requireAnyPermission } from "../middleware/permissions.js";
 import { adjustStock, listStockMovements } from "../services/inventory.js";
 
 const adjustSchema = z.object({
@@ -27,7 +27,11 @@ stockMovementRoutes.get("/", requireAuth, async (c) => {
   return c.json({ movements: serialize(movements) });
 });
 
-stockMovementRoutes.post("/adjust", requireAuth, requireManager, async (c) => {
+stockMovementRoutes.post(
+  "/adjust",
+  requireAuth,
+  requireAnyPermission("stock.adjust"),
+  async (c) => {
   const auth = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = adjustSchema.safeParse(body);

@@ -158,6 +158,32 @@ export function apiPublicOrigin(requestUrl?: string): string {
   return `http://localhost:${process.env.PORT ?? 3000}`;
 }
 
+export function assertStoreAttachmentKey(
+  storeId: string,
+  key: string | null | undefined,
+): string | null {
+  if (key == null) return null;
+  const trimmed = key.trim();
+  if (!trimmed) return null;
+  if (
+    !isSafeAttachmentKey(trimmed) ||
+    !trimmed.startsWith(`stores/${storeId}/vendor-attachments/`)
+  ) {
+    throw new Error("Invalid attachment");
+  }
+  return trimmed;
+}
+
+export async function withAttachmentUrl<T extends { attachmentKey?: string | null }>(
+  record: T,
+  requestUrl?: string,
+): Promise<T & { attachmentUrl: string | null }> {
+  return {
+    ...record,
+    attachmentUrl: await resolveAttachmentUrl(record.attachmentKey, requestUrl),
+  };
+}
+
 export async function resolveAttachmentUrl(
   key: string | null | undefined,
   requestUrl?: string,

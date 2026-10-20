@@ -1,5 +1,6 @@
 import {
   Badge,
+  Box,
   Button,
   Card,
   Grid,
@@ -26,7 +27,9 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { notifications } from "@mantine/notifications";
 import { useAuth } from "../context/AuthContext";
+import { useHasPermission } from "../hooks/usePermissions";
 import {
   fetchCalendarEvents,
   fetchCashiers,
@@ -131,6 +134,10 @@ function isCountableSale(order: Order): boolean {
 
 export function DashboardPage() {
   const { store } = useAuth();
+  const canOpenProjects = useHasPermission("pos.projects");
+  const canViewAllOrders = useHasPermission("orders.view");
+  const canViewItemSales = useHasPermission("orders.items");
+  const canViewCalendar = useHasPermission(["calendar.view", "calendar.manage"]);
   const [datePreset, setDatePreset] = useState<DatePreset>("today");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -192,6 +199,7 @@ export function DashboardPage() {
         dateTo: reportFilters.dateTo,
         cashierId: reportFilters.cashierId,
       }),
+    enabled: canViewItemSales,
   });
 
   const productsQuery = useQuery({
@@ -207,6 +215,7 @@ export function DashboardPage() {
   const allCalendarQuery = useQuery({
     queryKey: ["dashboard-all-calendar"],
     queryFn: () => fetchCalendarEvents(),
+    enabled: canViewCalendar,
   });
 
   const upcomingRange = useMemo(() => nextTwoDaysRange(), []);
@@ -218,6 +227,7 @@ export function DashboardPage() {
         from: upcomingRange.from,
         to: upcomingRange.to,
       }),
+    enabled: canViewCalendar,
   });
 
   const cashierOptions = useMemo(
@@ -331,7 +341,7 @@ export function DashboardPage() {
   const productStats = [
     {
       label: "Units sold",
-      value: String(itemSummary?.quantitySold ?? 0),
+      value: canViewItemSales ? String(itemSummary?.quantitySold ?? 0) : "—",
       icon: IconPackage,
       color: "orange",
     },
@@ -344,13 +354,15 @@ export function DashboardPage() {
     },
     {
       label: "Product cost",
-      value: formatMoney(itemSummary?.totalCost ?? 0, store!.currency),
+      value: canViewItemSales
+        ? formatMoney(itemSummary?.totalCost ?? 0, store!.currency)
+        : "—",
       icon: IconPackage,
       color: "gray",
     },
     {
       label: "Product margin",
-      value: formatMoney(itemProfit, store!.currency),
+      value: canViewItemSales ? formatMoney(itemProfit, store!.currency) : "—",
       icon: IconCash,
       color: itemProfit >= 0 ? "teal" : "red",
     },
@@ -769,12 +781,12 @@ export function DashboardPage() {
           </Text>
         </Group>
         <Stack gap="sm">
-          {orders.slice(0, 6).map((order) => (
-            <Link
-              key={order.id}
-              to={`/orders/${order.id}`}
-              style={{ textDecoration: "none", color: "inherit" }}
-            >
+          {orders.slice(0, 6).map((order) => {
+            const locked =
+              order.orderType === "PROJECT"
+                ? !canOpenProjects && !canViewAllOrders
+                : !canViewAllOrders;
+            const row = (
               <Group justify="space-between" p="xs" className="hover-row">
                 <div>
                   <Text fw={600} size="sm">
@@ -793,8 +805,33 @@ export function DashboardPage() {
                   </Text>
                 </Group>
               </Group>
-            </Link>
-          ))}
+            );
+            if (locked) {
+              return (
+                <Box
+                  key={order.id}
+                  style={{ cursor: "not-allowed" }}
+                  onClick={() =>
+                    notifications.show({
+                      color: "red",
+                      message: "You do not have permission to open this project",
+                    })
+                  }
+                >
+                  {row}
+                </Box>
+              );
+            }
+            return (
+              <Link
+                key={order.id}
+                to={`/orders/${order.id}`}
+                style={{ textDecoration: "none", color: "inherit" }}
+              >
+                {row}
+              </Link>
+            );
+          })}
           {orders.length === 0 ? (
             <Text c="dimmed">No orders match the selected filters.</Text>
           ) : null}

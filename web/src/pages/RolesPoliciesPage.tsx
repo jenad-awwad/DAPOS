@@ -41,6 +41,7 @@ import {
 } from "../lib/api";
 import { storeRoleLabel } from "../lib/format";
 import {
+  applyPermissionToggle,
   DEFAULT_ROLE_POLICIES,
   PERMISSION_CATALOG,
   type PermissionKey,
@@ -187,13 +188,16 @@ export function RolesPoliciesPage() {
   });
 
   function toggleRolePermission(roleId: string, key: PermissionKey, checked: boolean) {
-    setRoles(
+    setRoles((current) =>
       (current ?? activeRoles).map((role) => {
         if (role.id !== roleId) return role;
-        const permissions = new Set(role.permissions);
-        if (checked) permissions.add(key);
-        else permissions.delete(key);
-        return { ...role, permissions: [...permissions] };
+        if (role.systemCode === "ADMIN" && key === "roles.manage" && !checked) {
+          return role;
+        }
+        return {
+          ...role,
+          permissions: applyPermissionToggle(role.permissions, key, checked),
+        };
       }),
     );
   }
@@ -235,7 +239,8 @@ export function RolesPoliciesPage() {
             <Title order={2}>Roles & policies</Title>
           </Group>
           <Text c="dimmed">
-            Manage built-in and custom roles, then assign them to users
+            Administrator can edit every role. Use View to open a page, and the
+            indented rows to turn off editing or a specific POS feature.
           </Text>
         </div>
         <Button
@@ -257,8 +262,9 @@ export function RolesPoliciesPage() {
           <Stack gap="md">
             <Group justify="space-between">
               <Text size="sm" c="dimmed">
-                Built-in roles cannot be deleted. Custom roles can be removed when
-                no users are assigned.
+                Built-in roles, including Administrator, can be edited and cannot
+                be deleted. Turning off a page also turns off its features. Custom
+                roles can be removed when no users are assigned.
               </Text>
               <Group>
                 <Button
@@ -329,8 +335,10 @@ export function RolesPoliciesPage() {
                       {items.map((item) => (
                         <Table.Tr key={item.key}>
                           <Table.Td>
-                            <Text size="sm">{item.label}</Text>
-                            <Text size="xs" c="dimmed">
+                            <Text size="sm" pl={item.detail ? "md" : 0}>
+                              {item.label}
+                            </Text>
+                            <Text size="xs" c="dimmed" pl={item.detail ? "md" : 0}>
                               {item.key}
                             </Text>
                           </Table.Td>
@@ -339,6 +347,9 @@ export function RolesPoliciesPage() {
                               <Checkbox
                                 color="green"
                                 checked={role.permissions.includes(item.key)}
+                                disabled={
+                                  role.systemCode === "ADMIN" && item.key === "roles.manage"
+                                }
                                 onChange={(e) =>
                                   toggleRolePermission(
                                     role.id,
@@ -455,13 +466,12 @@ export function RolesPoliciesPage() {
                         key={item.key}
                         label={item.label}
                         color="green"
+                        ml={item.detail ? "md" : 0}
                         checked={newRolePermissions.includes(item.key)}
                         onChange={(e) => {
                           const checked = e.currentTarget.checked;
                           setNewRolePermissions((prev) =>
-                            checked
-                              ? [...prev, item.key]
-                              : prev.filter((key) => key !== item.key),
+                            applyPermissionToggle(prev, item.key, checked),
                           );
                         }}
                       />
@@ -548,13 +558,12 @@ export function RolesPoliciesPage() {
                           key={item.key}
                           label={item.label}
                           color="green"
+                          ml={item.detail ? "md" : 0}
                           checked={userPolicies.includes(item.key)}
                           onChange={(e) => {
                             const checked = e.currentTarget.checked;
                             setUserPolicies((prev) =>
-                              checked
-                                ? [...prev, item.key]
-                                : prev.filter((key) => key !== item.key),
+                              applyPermissionToggle(prev, item.key, checked),
                             );
                           }}
                         />

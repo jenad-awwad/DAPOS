@@ -29,7 +29,7 @@ import {
 } from "../components/ProductBarcodeField";
 import { ProductImagePicker } from "../components/ProductImagePicker";
 import { useAuth } from "../context/AuthContext";
-import { useCanManage } from "../hooks/useRoles";
+import { useHasPermission } from "../hooks/usePermissions";
 import {
   createProduct,
   deleteProduct,
@@ -88,7 +88,8 @@ function toIsoDateTime(localValue: string): string | undefined {
 }
 
 export function ProductsAdminPage() {
-  const canManage = useCanManage();
+  const canEditProducts = useHasPermission("products.manage");
+  const canViewProducts = useHasPermission(["products.view", "products.manage"]);
   const { store } = useAuth();
   const queryClient = useQueryClient();
   const [opened, { open, close }] = useDisclosure(false);
@@ -248,7 +249,7 @@ export function ProductsAdminPage() {
     setDateTo("");
   };
 
-  if (!canManage) return <Navigate to="/" replace />;
+  if (!canViewProducts) return <Navigate to="/" replace />;
   if (productsQuery.isLoading) return <Loader color="green" />;
 
   const categoryOptions = (categoriesQuery.data?.categories ?? [])
@@ -305,9 +306,11 @@ export function ProductsAdminPage() {
             Phase 1: item details and photo. Phase 2: price and cost.
           </Text>
         </div>
-        <Button color="green" leftSection={<IconPlus size={16} />} onClick={openCreate}>
-          Add product
-        </Button>
+        {canEditProducts ? (
+          <Button color="green" leftSection={<IconPlus size={16} />} onClick={openCreate}>
+            Add product
+          </Button>
+        ) : null}
       </Group>
 
       <Card withBorder padding="md" radius="md">
@@ -419,6 +422,7 @@ export function ProductsAdminPage() {
                 </Group>
               </Table.Td>
               <Table.Td ta="right">
+                {canEditProducts ? (
                 <Group gap={4} justify="flex-end">
                   {!product.isPriced ? (
                     <Button
@@ -443,6 +447,11 @@ export function ProductsAdminPage() {
                     </ActionIcon>
                   ) : null}
                 </Group>
+                ) : (
+                  <Text size="xs" c="dimmed">
+                    View only
+                  </Text>
+                )}
               </Table.Td>
             </Table.Tr>
           ))}

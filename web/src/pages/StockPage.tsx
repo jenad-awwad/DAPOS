@@ -17,13 +17,14 @@ import { useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
 import { IconAdjustments, IconPlus } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCanManage } from "../hooks/useRoles";
+import { useHasPermission } from "../hooks/usePermissions";
 import { adjustStock, fetchProducts, fetchStockMovements } from "../lib/api";
 import { formatDate } from "../lib/format";
 import { Navigate } from "react-router-dom";
 
 export function StockPage() {
-  const canManage = useCanManage();
+  const canAdjustStock = useHasPermission("stock.adjust");
+  const canViewStock = useHasPermission(["stock.view", "stock.adjust"]);
   const queryClient = useQueryClient();
   const [opened, { open, close }] = useDisclosure(false);
 
@@ -58,7 +59,7 @@ export function StockPage() {
     onError: (err: Error) => notifications.show({ color: "red", message: err.message }),
   });
 
-  if (!canManage) return <Navigate to="/inventory" replace />;
+  if (!canViewStock) return <Navigate to="/inventory" replace />;
   if (movementsQuery.isLoading) return <Loader color="green" />;
 
   const productOptions = (productsQuery.data?.products ?? []).map((p) => ({
@@ -73,9 +74,11 @@ export function StockPage() {
           <Title order={2}>Stock Movements</Title>
           <Text c="dimmed">Inventory audit trail and adjustments</Text>
         </div>
-        <Button color="green" leftSection={<IconPlus size={16} />} onClick={open}>
-          Adjust stock
-        </Button>
+        {canAdjustStock ? (
+          <Button color="green" leftSection={<IconPlus size={16} />} onClick={open}>
+            Adjust stock
+          </Button>
+        ) : null}
       </Group>
 
       <Table striped highlightOnHover>

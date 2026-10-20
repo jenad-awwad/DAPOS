@@ -24,7 +24,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
-import { useCanManage } from "../hooks/useRoles";
+import { useHasPermission } from "../hooks/usePermissions";
 import {
   createCustomer,
   deleteCustomer,
@@ -42,7 +42,8 @@ function toIsoDateTime(localValue: string): string | undefined {
 }
 
 export function CustomersPage() {
-  const canManage = useCanManage();
+  const canEditCustomers = useHasPermission("customers.manage");
+  const canViewCustomers = useHasPermission(["customers.view", "customers.manage"]);
   const { store } = useAuth();
   const queryClient = useQueryClient();
   const [nameSearch, setNameSearch] = useState("");
@@ -121,7 +122,7 @@ export function CustomersPage() {
     setLoyaltyFilter(null);
   };
 
-  if (!canManage) return <Navigate to="/" replace />;
+  if (!canViewCustomers) return <Navigate to="/" replace />;
   if (isLoading) return <Loader color="green" />;
 
   const customers = data?.customers ?? [];
@@ -135,6 +136,7 @@ export function CustomersPage() {
           <Title order={2}>Customers</Title>
           <Text c="dimmed">Customer records, loyalty, and order activity</Text>
         </div>
+        {canEditCustomers ? (
         <Button
           color="green"
           leftSection={<IconPlus size={16} />}
@@ -146,6 +148,7 @@ export function CustomersPage() {
         >
           Add customer
         </Button>
+        ) : null}
       </Group>
 
       <Card withBorder padding="md" radius="md">
@@ -302,6 +305,7 @@ export function CustomersPage() {
                       {customer.loyaltyEnrolled ? customer.loyaltyPoints : "—"}
                     </Table.Td>
                     <Table.Td ta="right">
+                      {canEditCustomers ? (
                       <Group gap={4} justify="flex-end" wrap="nowrap">
                         <ActionIcon
                           variant="light"
@@ -326,6 +330,11 @@ export function CustomersPage() {
                           <IconTrash size={16} />
                         </ActionIcon>
                       </Group>
+                      ) : (
+                        <Text size="xs" c="dimmed">
+                          View only
+                        </Text>
+                      )}
                     </Table.Td>
                   </Table.Tr>
                 ))}

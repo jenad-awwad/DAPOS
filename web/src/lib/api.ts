@@ -496,6 +496,7 @@ export function createProjectOrder(payload: {
   customerName?: string;
   customerPhone?: string;
   notes?: string;
+  attachmentKey?: string | null;
   discountTotal?: number;
   scheduleAt?: string;
   scheduleType?: CalendarEventType;
@@ -523,6 +524,7 @@ export function updateProjectOrder(
     customerName: string;
     customerPhone: string;
     notes: string;
+    attachmentKey: string | null;
     discountTotal: number;
     scheduleAt: string;
     scheduleType: CalendarEventType;
@@ -579,6 +581,7 @@ export function createCalendarEvent(payload: {
   customerId?: string;
   customerName?: string;
   customerPhone: string;
+  attachmentKey?: string | null;
 }) {
   return request<{ event: CalendarEvent }>("/calendar", {
     method: "POST",
@@ -600,6 +603,7 @@ export function updateCalendarEvent(
     customerId: string;
     customerName: string;
     customerPhone: string;
+    attachmentKey: string | null;
   }>,
 ) {
   return request<{ event: CalendarEvent }>(`/calendar/${id}`, {
@@ -719,7 +723,11 @@ export function createVendorPayment(payload: {
 }
 
 export function uploadVendorAttachment(imageDataUrl: string) {
-  return request<{ key: string }>("/uploads/vendor-attachment", {
+  return uploadAttachment(imageDataUrl);
+}
+
+export function uploadAttachment(imageDataUrl: string) {
+  return request<{ key: string }>("/uploads/attachment", {
     method: "POST",
     body: JSON.stringify({ imageDataUrl }),
   });

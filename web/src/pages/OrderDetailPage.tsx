@@ -4,6 +4,7 @@ import {
   Card,
   Divider,
   Group,
+  Image,
   Loader,
   Stack,
   Table,
@@ -16,7 +17,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { ProjectPartialPayments } from "../components/ProjectPartialPayments";
 import { useAuth } from "../context/AuthContext";
-import { useCanManage } from "../hooks/useRoles";
+import { useHasPermission } from "../hooks/usePermissions";
 import { fetchOrder, submitProjectOrder, voidOrder } from "../lib/api";
 import { invalidateDashboardQueries } from "../lib/dashboardQueries";
 import {
@@ -31,7 +32,7 @@ import { projectBalanceDue, projectIsFullyPaid, projectPaidTotal } from "../lib/
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { store } = useAuth();
-  const canManage = useCanManage();
+  const canVoidOrders = useHasPermission("orders.void");
   const queryClient = useQueryClient();
 
   const { data, isLoading, error } = useQuery({
@@ -71,7 +72,9 @@ export function OrderDetailPage() {
   if (error || !data?.order) {
     return (
       <Stack>
-        <Text c="red">Order not found</Text>
+        <Text c="red">
+          {error instanceof Error ? error.message : "Order not found"}
+        </Text>
         <Button component={Link} to="/orders" variant="light">
           Back to orders
         </Button>
@@ -119,7 +122,7 @@ export function OrderDetailPage() {
               {orderTypeLabel(order.orderType)}
             </Badge>
           ) : null}
-          {canManage && order.status === "COMPLETED" ? (
+          {canVoidOrders && order.status === "COMPLETED" ? (
             <Button
               color="red"
               variant="light"
@@ -151,6 +154,21 @@ export function OrderDetailPage() {
               <Text fw={600}>Customer</Text>
               <Text>{order.customer.name}</Text>
             </Group>
+          ) : null}
+
+          {order.attachmentUrl ? (
+            <>
+              <Divider />
+              <Text fw={600}>Attachment</Text>
+              <Image
+                src={order.attachmentUrl}
+                alt="Project attachment"
+                h={180}
+                w="100%"
+                fit="contain"
+                radius="md"
+              />
+            </>
           ) : null}
 
           <Divider />

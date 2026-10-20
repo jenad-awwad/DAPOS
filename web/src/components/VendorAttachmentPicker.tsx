@@ -2,7 +2,7 @@ import { Button, Group, Image, Stack, Text } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { IconCamera, IconPhoto } from "@tabler/icons-react";
 import { useRef, useState } from "react";
-import { uploadVendorAttachment } from "../lib/api";
+import { uploadAttachment } from "../lib/api";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
@@ -50,7 +50,7 @@ export function VendorAttachmentPicker({
     setUploading(true);
     try {
       const dataUrl = await readFileAsDataUrl(file);
-      const { key } = await uploadVendorAttachment(dataUrl);
+      const { key } = await uploadAttachment(dataUrl);
       onUploaded(key, dataUrl);
     } catch (err) {
       notifications.show({
@@ -65,7 +65,10 @@ export function VendorAttachmentPicker({
   return (
     <Stack gap="sm">
       <Text size="sm" fw={600}>
-        Attachment
+        Attachment{" "}
+        <Text span c="dimmed" fw={400}>
+          (optional)
+        </Text>
       </Text>
       {previewUrl ? (
         <Image
@@ -78,7 +81,7 @@ export function VendorAttachmentPicker({
         />
       ) : (
         <Text size="sm" c="dimmed">
-          Upload a photo or take one with the camera.
+          Optional. Upload a photo or take one with the camera.
         </Text>
       )}
       <Group>

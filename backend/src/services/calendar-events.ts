@@ -1,4 +1,5 @@
-import { CalendarEventStatus, CalendarEventType, PaymentMethod } from "@prisma/client";
+import { CalendarEventStatus, CalendarEventType, OrderType, PaymentMethod, PaymentStatus } from "@prisma/client";
+import { assertStoreAttachmentKey } from "../lib/object-storage.js";
 import { prisma } from "../lib/prisma.js";
 
 type CreateCalendarEventInput = {
@@ -14,6 +15,7 @@ type CreateCalendarEventInput = {
   customerId?: string;
   customerName?: string;
   customerPhone?: string;
+  attachmentKey?: string | null;
 };
 
 type UpdateCalendarEventInput = Partial<
@@ -152,6 +154,7 @@ export async function createCalendarEvent(input: CreateCalendarEventInput) {
       customerId,
       customerName: input.customerName?.trim(),
       customerPhone: input.customerPhone?.trim(),
+      attachmentKey: assertStoreAttachmentKey(input.storeId, input.attachmentKey),
     },
     include: eventInclude,
   });
@@ -222,6 +225,11 @@ export async function updateCalendarEvent(
       ...(input.customerPhone !== undefined
         ? { customerPhone: input.customerPhone?.trim() || null }
         : {}),
+      ...(input.attachmentKey !== undefined
+        ? {
+            attachmentKey: assertStoreAttachmentKey(storeId, input.attachmentKey),
+          }
+        : {}),
     },
     include: eventInclude,
   });
@@ -287,6 +295,29 @@ export async function completeCalendarEvent(storeId: string, eventId: string) {
     throw new Error("Activity is already completed");
   }
 
+  if (existing.orderId) {
+    const linkedOrder = await prisma.order.findFirst({
+      where: { id: existing.orderId, storeId },
+      include: { payments: true },
+    });
+    if (linkedOrder?.orderType === OrderType.PROJECT) {
+      const totalDue = roundMoney(linkedOrder.total.toNumber());
+      const paidTotal = roundMoney(
+        linkedOrder.payments
+          .filter((payment) => payment.status === PaymentStatus.COMPLETED)
+          .reduce((sum, payment) => sum + payment.amount.toNumber(), 0),
+      );
+      if (paidTotal !== totalDue) {
+        throw new Error(
+          `Payments (${paidTotal}) must equal the customer price (${totalDue}) before this project can be closed.`,
+        );
+      }
+      throw new Error(
+        "Close this project from the project screen after it is fully paid. It stays on the calendar.",
+      );
+    }
+  }
+
   const price = existing.price?.toNumber() ?? 0;
   if (price > 0) {
     const alreadyPaid = paidTotal(existing.payments);
@@ -315,6 +346,16 @@ export async function deleteCalendarEvent(storeId: string, eventId: string) {
 
   if (existing.status === CalendarEventStatus.COMPLETED) {
     throw new Error("Completed activities cannot be deleted");
+  }
+
+  if (existing.orderId) {
+    const linkedOrder = await prisma.order.findFirst({
+      where: { id: existing.orderId, storeId },
+      select: { orderType: true },
+    });
+    if (linkedOrder?.orderType === OrderType.PROJECT) {
+      throw new Error("A project stays on the calendar and cannot be removed from it.");
+    }
   }
 
   await prisma.calendarEvent.delete({ where: { id: eventId } });

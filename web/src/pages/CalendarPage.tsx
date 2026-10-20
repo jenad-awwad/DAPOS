@@ -1,4 +1,5 @@
 import {
+  Anchor,
   Badge,
   Box,
   Button,
@@ -23,9 +24,11 @@ import {
 } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { CalendarActivityPayments } from "../components/CalendarActivityPayments";
+import { VendorAttachmentPicker } from "../components/VendorAttachmentPicker";
 import { useAuth } from "../context/AuthContext";
+import { useHasPermission } from "../hooks/usePermissions";
 import {
   completeCalendarEvent,
   createCalendarEvent,
@@ -93,8 +96,17 @@ function eventColor(type: CalendarEventType) {
   return colors[type] ?? "gray";
 }
 
+function isProjectEvent(event: CalendarEvent) {
+  return event.order?.orderType === "PROJECT";
+}
+
 export function CalendarPage() {
   const { store } = useAuth();
+  const canOpenProjects = useHasPermission("pos.projects");
+  const canViewAllOrders = useHasPermission("orders.view");
+  const canViewCalendar = useHasPermission(["calendar.view", "calendar.manage"]);
+  const canEditCalendar = useHasPermission("calendar.manage");
+  const canOpenProject = canOpenProjects || canViewAllOrders;
   const queryClient = useQueryClient();
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [modalOpen, setModalOpen] = useState(false);
@@ -108,6 +120,8 @@ export function CalendarPage() {
   const [formCustomerName, setFormCustomerName] = useState("");
   const [formCustomerPhone, setFormCustomerPhone] = useState("");
   const [formPrice, setFormPrice] = useState<number | "">("");
+  const [attachmentKey, setAttachmentKey] = useState<string | null>(null);
+  const [attachmentPreview, setAttachmentPreview] = useState<string | null>(null);
 
   const canCompleteEvent = (event: CalendarEvent) =>
     event.status === "OPEN" && activityIsFullyPaid(event);
@@ -174,6 +188,7 @@ export function CalendarPage() {
         customerName: formCustomerName.trim() || undefined,
         customerPhone: formCustomerPhone.trim(),
         price: formPrice === "" ? undefined : Number(formPrice) || 0,
+        attachmentKey,
       };
 
       if (editingEvent) {
@@ -238,6 +253,8 @@ export function CalendarPage() {
     setFormCustomerName("");
     setFormCustomerPhone("");
     setFormPrice("");
+    setAttachmentKey(null);
+    setAttachmentPreview(null);
     setModalOpen(true);
   };
 
@@ -253,6 +270,8 @@ export function CalendarPage() {
     setFormCustomerName(event.customerName ?? event.customer?.name ?? "");
     setFormCustomerPhone(event.customerPhone ?? event.customer?.phone ?? "");
     setFormPrice(event.price ?? "");
+    setAttachmentKey(event.attachmentKey ?? null);
+    setAttachmentPreview(event.attachmentUrl ?? null);
     setModalOpen(true);
   };
 
@@ -261,6 +280,7 @@ export function CalendarPage() {
     year: "numeric",
   });
 
+  if (!canViewCalendar) return <Navigate to="/" replace />;
   if (eventsQuery.isLoading) return <Loader color="green" />;
 
   return (
@@ -270,9 +290,11 @@ export function CalendarPage() {
           <Title order={2}>Calendar</Title>
           <Text c="dimmed">Track scheduled orders, installations, and activities</Text>
         </div>
-        <Button color="green" leftSection={<IconPlus size={16} />} onClick={() => openCreate()}>
-          New activity
-        </Button>
+        {canEditCalendar ? (
+          <Button color="green" leftSection={<IconPlus size={16} />} onClick={() => openCreate()}>
+            New activity
+          </Button>
+        ) : null}
       </Group>
 
       <Card withBorder padding="md" radius="md">
@@ -330,10 +352,12 @@ export function CalendarPage() {
                 style={{
                   minHeight: 110,
                   opacity: inMonth ? 1 : 0.45,
-                  cursor: "pointer",
+                  cursor: canEditCalendar ? "pointer" : "default",
                   background: inMonth ? undefined : "var(--mantine-color-gray-0)",
                 }}
-                onClick={() => openCreate(day)}
+                onClick={() => {
+                  if (canEditCalendar) openCreate(day);
+                }}
               >
                 <Text size="sm" fw={600} mb={6}>
                   {day.getDate()}
@@ -383,7 +407,11 @@ export function CalendarPage() {
                       {calendarEventTypeLabel(event.type)}
                     </Badge>
                     <Badge color={event.status === "OPEN" ? "blue" : "gray"} variant="light">
-                      {event.status === "OPEN" ? "Open" : "Done"}
+                      {event.status === "OPEN"
+                        ? "Open"
+                        : isProjectEvent(event)
+                          ? "Closed"
+                          : "Done"}
                     </Badge>
                     <Text fw={600}>{event.title}</Text>
                   </Group>
@@ -404,7 +432,12 @@ export function CalendarPage() {
                       Due: {formatMoney(activityBalanceDue(event), store!.currency)}
                     </Text>
                   ) : null}
-                  {event.order ? (
+                  {event.attachmentUrl ? (
+                    <Anchor href={event.attachmentUrl} target="_blank" rel="noreferrer" size="sm">
+                      View attachment
+                    </Anchor>
+                  ) : null}
+                  {event.order && (!isProjectEvent(event) || canOpenProject) ? (
                     <Text
                       component={Link}
                       to={`/orders/${event.order.id}`}
@@ -414,10 +447,14 @@ export function CalendarPage() {
                       {event.order.orderNumber}
                       {event.order.projectTitle ? ` — ${event.order.projectTitle}` : ""}
                     </Text>
+                  ) : isProjectEvent(event) ? (
+                    <Text size="sm" c="dimmed">
+                      Project stays on the calendar. Opening it requires the Projects or View orders permission.
+                    </Text>
                   ) : null}
                 </div>
                 <Group gap="xs">
-                  {event.status === "OPEN" ? (
+                  {canEditCalendar && event.status === "OPEN" && !isProjectEvent(event) ? (
                     <Button
                       variant="light"
                       color="green"
@@ -430,7 +467,7 @@ export function CalendarPage() {
                     </Button>
                   ) : null}
                   <Button variant="light" size="xs" onClick={() => openEdit(event)}>
-                    Edit
+                    {canEditCalendar ? "Edit" : "View"}
                   </Button>
                 </Group>
               </Group>
@@ -445,7 +482,9 @@ export function CalendarPage() {
           setModalOpen(false);
           setEditingEvent(null);
         }}
-        title={editingEvent ? "Edit activity" : "New activity"}
+        title={
+          editingEvent ? (canEditCalendar ? "Edit activity" : "Activity") : "New activity"
+        }
         centered
         size="md"
       >
@@ -453,12 +492,14 @@ export function CalendarPage() {
           <TextInput
             label="Title"
             required
+            disabled={!canEditCalendar}
             value={formTitle}
             onChange={(e) => setFormTitle(e.currentTarget.value)}
           />
           <Select
             label="Type"
             data={EVENT_TYPES}
+            disabled={!canEditCalendar}
             value={formType}
             onChange={(v) => setFormType((v as CalendarEventType) ?? "OTHER")}
           />
@@ -467,12 +508,14 @@ export function CalendarPage() {
               label="Date"
               type="date"
               required
+              disabled={!canEditCalendar}
               value={formDate}
               onChange={(e) => setFormDate(e.currentTarget.value)}
             />
             <TextInput
               label="Time"
               type="time"
+              disabled={!canEditCalendar}
               value={formTime}
               onChange={(e) => setFormTime(e.currentTarget.value)}
             />
@@ -482,6 +525,7 @@ export function CalendarPage() {
             placeholder="Or enter new customer below"
             clearable
             searchable
+            disabled={!canEditCalendar}
             data={(customersQuery.data?.customers ?? []).map((c) => ({
               value: c.id,
               label: `${c.name}${c.phone ? ` · ${c.phone}` : ""}`,
@@ -503,12 +547,14 @@ export function CalendarPage() {
             <TextInput
               label="Customer name"
               required={!formCustomerId}
+              disabled={!canEditCalendar}
               value={formCustomerName}
               onChange={(e) => setFormCustomerName(e.currentTarget.value)}
             />
             <TextInput
               label="Phone number"
               required
+              disabled={!canEditCalendar}
               value={formCustomerPhone}
               onChange={(e) => setFormCustomerPhone(e.currentTarget.value)}
             />
@@ -518,17 +564,36 @@ export function CalendarPage() {
             description="If set, record payments until fully paid before closing"
             min={0}
             decimalScale={2}
+            disabled={!canEditCalendar}
             value={formPrice}
             onChange={(v) => setFormPrice(v === "" ? "" : Number(v) || 0)}
           />
           <Textarea
             label="Description"
+            disabled={!canEditCalendar}
             value={formDescription}
             onChange={(e) => setFormDescription(e.currentTarget.value)}
             minRows={3}
           />
+          {canEditCalendar ? (
+          <VendorAttachmentPicker
+            previewUrl={attachmentPreview}
+            onUploaded={(key, previewUrl) => {
+              setAttachmentKey(key);
+              setAttachmentPreview(previewUrl);
+            }}
+            onClear={() => {
+              setAttachmentKey(null);
+              setAttachmentPreview(null);
+            }}
+          />
+          ) : attachmentPreview ? (
+            <Anchor href={attachmentPreview} target="_blank" rel="noreferrer" size="sm">
+              View attachment
+            </Anchor>
+          ) : null}
 
-          {editingEvent?.order ? (
+          {editingEvent?.order && (!isProjectEvent(editingEvent) || canOpenProject) ? (
             <Text size="sm">
               Linked order:{" "}
               <Text
@@ -540,9 +605,15 @@ export function CalendarPage() {
                 {editingEvent.order.orderNumber}
               </Text>
             </Text>
+          ) : editingEvent && isProjectEvent(editingEvent) ? (
+            <Text size="sm" c="dimmed">
+              This project stays on the calendar
+              {editingEvent.status === "COMPLETED" ? " after it is closed" : ""}. Opening it
+              requires the Projects or View orders permission.
+            </Text>
           ) : null}
 
-          {editingEvent?.status === "OPEN" ? (
+          {canEditCalendar && editingEvent?.status === "OPEN" && !isProjectEvent(editingEvent) ? (
             <>
               <CalendarActivityPayments
                 event={editingEvent}
@@ -567,7 +638,7 @@ export function CalendarPage() {
           ) : null}
 
           <Group justify="space-between">
-            {editingEvent && editingEvent.status === "OPEN" ? (
+            {canEditCalendar && editingEvent && editingEvent.status === "OPEN" && !isProjectEvent(editingEvent) ? (
               <Button
                 color="red"
                 variant="light"
@@ -590,13 +661,15 @@ export function CalendarPage() {
               >
                 Cancel
               </Button>
-              <Button
-                color="green"
-                loading={saveMutation.isPending}
-                onClick={() => saveMutation.mutate()}
-              >
-                Save
-              </Button>
+              {canEditCalendar && editingEvent?.status !== "COMPLETED" ? (
+                <Button
+                  color="green"
+                  loading={saveMutation.isPending}
+                  onClick={() => saveMutation.mutate()}
+                >
+                  Save
+                </Button>
+              ) : null}
             </Group>
           </Group>
         </Stack>

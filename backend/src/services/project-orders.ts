@@ -7,6 +7,7 @@ import {
   PaymentStatus,
   type Prisma,
 } from "@prisma/client";
+import { assertStoreAttachmentKey } from "../lib/object-storage.js";
 import { prisma } from "../lib/prisma.js";
 import { syncProjectOrderVendorInvoices } from "./vendors.js";
 
@@ -29,6 +30,7 @@ type CreateOpenProjectInput = {
   customerName?: string;
   customerPhone?: string;
   notes?: string;
+  attachmentKey?: string | null;
   discountTotal?: number;
   scheduleAt?: Date;
   scheduleType?: CalendarEventType;
@@ -46,6 +48,7 @@ type UpdateOpenProjectInput = {
   customerName?: string;
   customerPhone?: string;
   notes?: string;
+  attachmentKey?: string | null;
   discountTotal?: number;
   scheduleAt?: Date;
   scheduleType?: CalendarEventType;
@@ -201,15 +204,14 @@ async function syncCalendarEvent(
     where: { orderId: params.orderId, storeId: params.storeId },
   });
 
-  if (!params.scheduleAt) {
-    return existing;
-  }
-
   const data = {
     title: params.title,
-    type: params.scheduleType ?? CalendarEventType.SCHEDULED_ORDER,
-    status: CalendarEventStatus.OPEN,
-    startsAt: params.scheduleAt,
+    type: params.scheduleType ?? existing?.type ?? CalendarEventType.SCHEDULED_ORDER,
+    status:
+      existing?.status === CalendarEventStatus.COMPLETED
+        ? CalendarEventStatus.COMPLETED
+        : CalendarEventStatus.OPEN,
+    startsAt: params.scheduleAt ?? existing?.startsAt ?? new Date(),
     customerId: params.customerId,
     customerName: params.customerName?.trim() || null,
     customerPhone: params.customerPhone?.trim() || null,
@@ -280,6 +282,10 @@ export async function createOpenProject(input: CreateOpenProjectInput) {
           discountTotal: totals.discount,
           total: totals.customerTotal,
           notes: input.notes?.trim(),
+          attachmentKey: assertStoreAttachmentKey(
+            input.storeId,
+            input.attachmentKey,
+          ),
           projectMaterials:
             materialLines.length > 0
               ? { create: materialLines }
@@ -288,23 +294,21 @@ export async function createOpenProject(input: CreateOpenProjectInput) {
         include: projectInclude,
       });
 
-      if (input.scheduleAt) {
-        const customer = customerId
-          ? await tx.customer.findFirst({ where: { id: customerId } })
-          : null;
+      const customer = customerId
+        ? await tx.customer.findFirst({ where: { id: customerId } })
+        : null;
 
-        await syncCalendarEvent(tx, {
-          storeId: input.storeId,
-          orderId: order.id,
-          title: input.projectTitle.trim(),
-          scheduleAt: input.scheduleAt,
-          scheduleType: input.scheduleType,
-          customerId,
-          customerName: customer?.name ?? input.customerName,
-          customerPhone: customer?.phone ?? input.customerPhone,
-          description: input.notes,
-        });
-      }
+      await syncCalendarEvent(tx, {
+        storeId: input.storeId,
+        orderId: order.id,
+        title: input.projectTitle.trim(),
+        scheduleAt: input.scheduleAt,
+        scheduleType: input.scheduleType,
+        customerId,
+        customerName: customer?.name ?? input.customerName,
+        customerPhone: customer?.phone ?? input.customerPhone,
+        description: input.notes,
+      });
 
       await syncProjectOrderVendorInvoices(
         tx,
@@ -446,6 +450,14 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
           discountTotal: totals.discount,
           total: totals.customerTotal,
           ...(input.notes !== undefined ? { notes: input.notes.trim() || null } : {}),
+          ...(input.attachmentKey !== undefined
+            ? {
+                attachmentKey: assertStoreAttachmentKey(
+                  input.storeId,
+                  input.attachmentKey,
+                ),
+              }
+            : {}),
         },
         include: projectInclude,
       });
@@ -460,24 +472,23 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
         });
       }
 
-      if (input.scheduleAt !== undefined) {
-        const customer = customerId
-          ? await tx.customer.findFirst({ where: { id: customerId } })
-          : order.customer;
+      const scheduledCustomer = customerId
+        ? await tx.customer.findFirst({ where: { id: customerId } })
+        : order.customer;
 
-        await syncCalendarEvent(tx, {
-          storeId: input.storeId,
-          orderId: order.id,
-          title: input.projectTitle?.trim() ?? order.projectTitle ?? order.orderNumber,
-          scheduleAt: input.scheduleAt,
-          scheduleType: input.scheduleType,
-          customerId: customerId ?? undefined,
-          customerName: customer?.name ?? input.customerName,
-          customerPhone: customer?.phone ?? input.customerPhone,
-          description: input.notes ?? order.notes ?? undefined,
-        });
+      await syncCalendarEvent(tx, {
+        storeId: input.storeId,
+        orderId: order.id,
+        title: input.projectTitle?.trim() ?? order.projectTitle ?? order.orderNumber,
+        scheduleAt: input.scheduleAt,
+        scheduleType: input.scheduleType,
+        customerId: customerId ?? undefined,
+        customerName: scheduledCustomer?.name ?? input.customerName,
+        customerPhone: scheduledCustomer?.phone ?? input.customerPhone,
+        description: input.notes ?? order.notes ?? undefined,
+      });
 
-        if (input.scheduleAt) {
+      if (input.scheduleAt) {
           await tx.orderProjectAdjustment.create({
             data: {
               orderId: order.id,
@@ -485,7 +496,6 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
               note: `Scheduled for ${input.scheduleAt.toISOString()}`,
             },
           });
-        }
       }
 
       await syncProjectOrderVendorInvoices(
@@ -585,13 +595,12 @@ export async function submitOpenProject(input: SubmitProjectInput) {
         throw new Error("Open project not found");
       }
 
-      const totalDue = order.total.toNumber();
+      const totalDue = roundMoney(order.total.toNumber());
       const paidTotal = paidTotalFromPayments(order.payments);
-      const balanceDue = roundMoney(totalDue - paidTotal);
 
-      if (balanceDue > 0) {
+      if (paidTotal !== totalDue) {
         throw new Error(
-          `Outstanding balance of ${balanceDue}. Record partial payments until fully paid, then submit.`,
+          `Payments (${paidTotal}) must equal the customer price (${totalDue}) before this project can be closed.`,
         );
       }
 

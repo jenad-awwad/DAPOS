@@ -18,7 +18,7 @@ import {
   updateStoreRole,
 } from "../services/store-roles.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
-import { requireAdmin } from "../middleware/roles.js";
+import { requireAnyPermission } from "../middleware/permissions.js";
 
 const permissionSchema = z.string().refine(isPermissionKey, {
   message: "Invalid permission key",
@@ -42,7 +42,7 @@ const updateRoleSchema = z.object({
 
 export const accessRoutes = new Hono<AppEnv>();
 
-accessRoutes.use("*", requireAuth, requireAdmin);
+accessRoutes.use("*", requireAuth, requireAnyPermission("roles.manage"));
 
 accessRoutes.get("/catalog", (c) => {
   return c.json({ permissions: PERMISSION_CATALOG });

@@ -34,6 +34,7 @@ import {
   PendingPartialPaymentFields,
   ProjectPartialPayments,
 } from "./ProjectPartialPayments";
+import { VendorAttachmentPicker } from "./VendorAttachmentPicker";
 import type { CalendarEventType, PaymentMethod } from "../lib/types";
 
 const SCHEDULE_TYPES: { value: CalendarEventType; label: string }[] = [
@@ -75,6 +76,8 @@ export function PosProjectPanel() {
   const [customerName, setCustomerName] = useState("");
   const [customerPhone, setCustomerPhone] = useState("");
   const [notes, setNotes] = useState("");
+  const [attachmentKey, setAttachmentKey] = useState<string | null>(null);
+  const [attachmentPreview, setAttachmentPreview] = useState<string | null>(null);
   const [sellQuantity, setSellQuantity] = useState<number | "">(1);
   const [sellUnitPrice, setSellUnitPrice] = useState<number | "">(0);
   const [invoiceDiscountPercent, setInvoiceDiscountPercent] = useState<number | "">(0);
@@ -108,6 +111,8 @@ export function PosProjectPanel() {
     setSellQuantity(order.projectSellQuantity ?? 1);
     setSellUnitPrice(order.projectSellUnitPrice ?? 0);
     setNotes(order.notes ?? "");
+    setAttachmentKey(order.attachmentKey ?? null);
+    setAttachmentPreview(order.attachmentUrl ?? null);
     setCustomerId(order.customer?.id ?? null);
     setCustomerName(order.customer?.name ?? "");
     setCustomerPhone(order.customer?.phone ?? "");
@@ -166,6 +171,8 @@ export function PosProjectPanel() {
     setCustomerName("");
     setCustomerPhone("");
     setNotes("");
+    setAttachmentKey(null);
+    setAttachmentPreview(null);
     setSellQuantity(1);
     setSellUnitPrice(0);
     setInvoiceDiscountPercent(0);
@@ -219,6 +226,7 @@ export function PosProjectPanel() {
       customerName: customerName.trim() || undefined,
       customerPhone: customerPhone.trim() || undefined,
       notes: notes.trim() || undefined,
+      attachmentKey,
       discountTotal: invoiceDiscountAmount > 0 ? invoiceDiscountAmount : undefined,
     };
   };
@@ -370,9 +378,10 @@ export function PosProjectPanel() {
   };
 
   const editingOrder = editOrderQuery.data?.order;
-  const editingBalanceDue = editingOrder
-    ? projectBalanceDue(editingOrder)
-    : customerTotal;
+  const pendingPayment = partialAmount === "" ? 0 : Math.max(0, Number(partialAmount) || 0);
+  const recordedPayment = editingOrder ? projectPaidTotal(editingOrder) : 0;
+  const projectedPaid = Math.round((recordedPayment + pendingPayment) * 100) / 100;
+  const canCloseProject = projectedPaid === customerTotal;
 
   return (
     <GridLike
@@ -517,6 +526,18 @@ export function PosProjectPanel() {
             value={notes}
             onChange={(e) => setNotes(e.currentTarget.value)}
             minRows={2}
+          />
+
+          <VendorAttachmentPicker
+            previewUrl={attachmentPreview}
+            onUploaded={(key, previewUrl) => {
+              setAttachmentKey(key);
+              setAttachmentPreview(previewUrl);
+            }}
+            onClear={() => {
+              setAttachmentKey(null);
+              setAttachmentPreview(null);
+            }}
           />
         </Stack>
       }
@@ -669,18 +690,16 @@ export function PosProjectPanel() {
             {editingOrderId ? "Update & schedule" : "Schedule project"}
           </Button>
             <Text size="xs" c="dimmed">
-              Saves as open on the calendar. Partial payments can be added now or later.
+              The project stays on the calendar, including after it is closed.
             </Text>
           </Stack>
 
           <Divider my="md" label="Close project" labelPosition="center" />
 
           <Text size="sm" c="dimmed" mb="md">
-            {editingOrderId
-              ? editingBalanceDue > 0
-                ? `Balance due: ${formatMoney(editingBalanceDue, store!.currency)}. Record payments until fully paid.`
-                : "Fully paid — submit to close this project."
-              : "Submit closes the project only when the full customer total has been recorded as payments."}
+            {canCloseProject
+              ? "Payments equal the customer price. Submit to close this project."
+              : `Payments must equal the customer price before closing. Recorded ${formatMoney(projectedPaid, store!.currency)} of ${formatMoney(customerTotal, store!.currency)}.`}
           </Text>
 
           <Button
@@ -688,11 +707,7 @@ export function PosProjectPanel() {
             fullWidth
             leftSection={<IconCash size={16} />}
             loading={loadingAction === "submit"}
-            disabled={
-              editingOrderId
-                ? editingBalanceDue > 0 && (partialAmount === "" || Number(partialAmount) <= 0)
-                : false
-            }
+            disabled={!canCloseProject}
             onClick={submitProject}
           >
             Submit project

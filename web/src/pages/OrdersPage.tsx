@@ -21,6 +21,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import { useHasPermission } from "../hooks/usePermissions";
 import { fetchCashiers, fetchItemSalesReport, fetchOrders } from "../lib/api";
 import { exportItemSalesToExcel } from "../lib/exportItemSales";
 import {
@@ -82,6 +83,9 @@ function statusColor(status: string) {
 
 export function OrdersPage() {
   const { store } = useAuth();
+  const canOpenProjects = useHasPermission("pos.projects");
+  const canViewAllOrders = useHasPermission("orders.view");
+  const canViewItemSales = useHasPermission("orders.items");
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<string | null>("orders");
 
@@ -107,7 +111,7 @@ export function OrdersPage() {
       limit: 200,
       orderNumber: debouncedOrderNumber || undefined,
       status: status ?? undefined,
-      orderType: orderType ?? undefined,
+      orderType: canViewAllOrders ? (orderType ?? undefined) : "PROJECT",
       paymentOpen:
         paymentState === "OPEN"
           ? true
@@ -126,6 +130,7 @@ export function OrdersPage() {
       cashierId,
       dateFrom,
       dateTo,
+      canViewAllOrders,
     ],
   );
 
@@ -199,14 +204,20 @@ export function OrdersPage() {
   return (
     <Stack gap="lg">
       <div>
-        <Title order={2}>Orders</Title>
-        <Text c="dimmed">Sales history and item reports</Text>
+        <Title order={2}>{canViewAllOrders ? "Orders" : "Projects"}</Title>
+        <Text c="dimmed">
+          {canViewAllOrders
+            ? "Sales history and item reports"
+            : "Projects only. The full order list needs the View orders permission."}
+        </Text>
       </div>
 
       <Tabs value={activeTab} onChange={setActiveTab}>
         <Tabs.List>
-          <Tabs.Tab value="orders">Orders</Tabs.Tab>
-          <Tabs.Tab value="item-sales">Items sales</Tabs.Tab>
+          <Tabs.Tab value="orders">{canViewAllOrders ? "Orders" : "Projects"}</Tabs.Tab>
+          {canViewAllOrders && canViewItemSales ? (
+            <Tabs.Tab value="item-sales">Items sales</Tabs.Tab>
+          ) : null}
         </Tabs.List>
 
         <Tabs.Panel value="orders" pt="md">
@@ -248,16 +259,18 @@ export function OrdersPage() {
                       onChange={setStatus}
                     />
                   </Grid.Col>
-                  <Grid.Col span={{ base: 12, sm: 6, md: 4 }}>
-                    <Select
-                      label="Type"
-                      placeholder="All types"
-                      clearable
-                      data={[...ORDER_TYPES]}
-                      value={orderType}
-                      onChange={(value) => setOrderType((value as OrderType | null) ?? null)}
-                    />
-                  </Grid.Col>
+                  {canViewAllOrders ? (
+                    <Grid.Col span={{ base: 12, sm: 6, md: 4 }}>
+                      <Select
+                        label="Type"
+                        placeholder="All types"
+                        clearable
+                        data={[...ORDER_TYPES]}
+                        value={orderType}
+                        onChange={(value) => setOrderType((value as OrderType | null) ?? null)}
+                      />
+                    </Grid.Col>
+                  ) : null}
                   <Grid.Col span={{ base: 12, sm: 6, md: 4 }}>
                     <Select
                       label="Payment status"
@@ -330,7 +343,23 @@ export function OrdersPage() {
                       <Table.Tr
                         key={order.id}
                         style={{ cursor: "pointer" }}
-                        onClick={() => navigate(`/orders/${order.id}`)}
+                        onClick={() => {
+                          if (typeValue !== "PROJECT" && !canViewAllOrders) {
+                            notifications.show({
+                              color: "red",
+                              message: "You do not have permission to view this order",
+                            });
+                            return;
+                          }
+                          if (typeValue === "PROJECT" && !canOpenProjects && !canViewAllOrders) {
+                            notifications.show({
+                              color: "red",
+                              message: "You do not have permission to open this project",
+                            });
+                            return;
+                          }
+                          navigate(`/orders/${order.id}`);
+                        }}
                       >
                         <Table.Td>
                           <Text fw={600}>{order.orderNumber}</Text>

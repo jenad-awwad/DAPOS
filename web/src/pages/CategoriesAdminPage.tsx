@@ -19,7 +19,7 @@ import { IconEdit, IconPlus, IconTrash } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Navigate } from "react-router-dom";
-import { useCanManage } from "../hooks/useRoles";
+import { useHasPermission } from "../hooks/usePermissions";
 import {
   createCategory,
   deleteCategory,
@@ -29,7 +29,8 @@ import {
 import type { CategoryAdmin } from "../lib/types";
 
 export function CategoriesAdminPage() {
-  const canManage = useCanManage();
+  const canEditCategories = useHasPermission("categories.manage");
+  const canViewCategories = useHasPermission(["categories.view", "categories.manage"]);
   const queryClient = useQueryClient();
   const [opened, { open, close }] = useDisclosure(false);
   const [editing, setEditing] = useState<CategoryAdmin | null>(null);
@@ -65,7 +66,7 @@ export function CategoriesAdminPage() {
     onError: (err: Error) => notifications.show({ color: "red", message: err.message }),
   });
 
-  if (!canManage) return <Navigate to="/" replace />;
+  if (!canViewCategories) return <Navigate to="/" replace />;
   if (isLoading) return <Loader color="green" />;
 
   return (
@@ -75,6 +76,7 @@ export function CategoriesAdminPage() {
           <Title order={2}>Categories</Title>
           <Text c="dimmed">Organize your product catalog</Text>
         </div>
+        {canEditCategories ? (
         <Button
           color="green"
           leftSection={<IconPlus size={16} />}
@@ -86,6 +88,7 @@ export function CategoriesAdminPage() {
         >
           Add category
         </Button>
+        ) : null}
       </Group>
 
       <Table striped>
@@ -110,6 +113,7 @@ export function CategoriesAdminPage() {
                 </Badge>
               </Table.Td>
               <Table.Td ta="right">
+                {canEditCategories ? (
                 <Group gap={4} justify="flex-end">
                   <ActionIcon
                     variant="light"
@@ -131,6 +135,11 @@ export function CategoriesAdminPage() {
                     </ActionIcon>
                   ) : null}
                 </Group>
+                ) : (
+                  <Text size="xs" c="dimmed">
+                    View only
+                  </Text>
+                )}
               </Table.Td>
             </Table.Tr>
           ))}

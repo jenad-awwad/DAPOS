@@ -28,6 +28,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { ProductCard } from "../components/ProductCard";
 import { PosProjectPanel } from "../components/PosProjectPanel";
 import { useAuth } from "../context/AuthContext";
+import { useHasPermission } from "../hooks/usePermissions";
 import { useCart } from "../context/CartContext";
 import {
   createOrder,
@@ -48,12 +49,23 @@ const OTHER_PAYMENTS: PaymentMethod[] = ["DEBIT", "BREAKAGE", "DELIVERY"];
 
 export function PosPage() {
   const { store } = useAuth();
+  const canSell = useHasPermission("pos.sales");
+  const canOpenProjects = useHasPermission("pos.projects");
+  const canDiscount = useHasPermission("pos.discount");
+  const canChangePrice = useHasPermission("pos.price");
+  const canLoyalty = useHasPermission("pos.loyalty");
+  const canOtherPayments = useHasPermission("pos.payments.other");
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [posTab, setPosTab] = useState(
-    searchParams.get("edit") ? "projects" : "sales",
+    canOpenProjects && (searchParams.get("edit") || !canSell) ? "projects" : "sales",
   );
+  const activeTab = !canSell && canOpenProjects
+    ? "projects"
+    : canSell && !canOpenProjects
+      ? "sales"
+      : posTab;
   const {
     items,
     itemCount,
@@ -238,7 +250,7 @@ export function PosPage() {
   const completeSale = async () => {
     if (items.length === 0) return;
 
-    if (loyaltyActive) {
+    if (canLoyalty && loyaltyActive) {
       if (!customerName.trim() || !customerPhone.trim()) {
         notifications.show({
           color: "red",
@@ -248,7 +260,8 @@ export function PosPage() {
       }
     }
 
-    const resolvedPayment = showOtherPayments ? otherPayment : paymentMethod;
+    const resolvedPayment =
+      canOtherPayments && showOtherPayments ? otherPayment : paymentMethod;
 
     if (resolvedPayment === "DEBIT") {
       if (!debitCustomerConfirmed || !debitCustomerName.trim() || !debitCustomerPhone.trim()) {
@@ -265,7 +278,7 @@ export function PosPage() {
     try {
       let saleCustomerId: string | undefined;
 
-      if (loyaltyActive) {
+      if (canLoyalty && loyaltyActive) {
         const { customer } = await enrollLoyaltyCustomer({
           name: customerName.trim(),
           phone: customerPhone.trim(),
@@ -285,12 +298,12 @@ export function PosPage() {
         items: items.map((item) => ({
           productId: item.product.id,
           quantity: Number(item.quantity),
-          unitPrice: Number(item.unitPrice),
+          unitPrice: canChangePrice ? Number(item.unitPrice) : Number(item.product.price),
         })),
         paymentMethod: resolvedPayment,
         customerId: saleCustomerId,
         discountTotal:
-          invoiceDiscountAmount > 0 ? Number(invoiceDiscountAmount) : undefined,
+          canDiscount && invoiceDiscountAmount > 0 ? Number(invoiceDiscountAmount) : undefined,
       });
       await invalidateDashboardQueries(queryClient);
       clear();
@@ -318,7 +331,16 @@ export function PosPage() {
     }
   };
 
-  if (productsQuery.isLoading) return <Loader color="green" />;
+  if (!canSell && !canOpenProjects) {
+    return (
+      <Stack>
+        <Title order={2}>Point of Sale</Title>
+        <Text c="dimmed">You do not have permission to use the point of sale.</Text>
+      </Stack>
+    );
+  }
+
+  if (productsQuery.isLoading && canSell) return <Loader color="green" />;
 
   return (
     <Stack gap="md">
@@ -327,12 +349,13 @@ export function PosPage() {
         <Text c="dimmed">Regular sales or custom projects with multi-vendor costs</Text>
       </div>
 
-      <Tabs value={posTab} onChange={(v) => setPosTab(v ?? "sales")} color="green">
+      <Tabs value={activeTab} onChange={(v) => setPosTab(v ?? "sales")} color="green">
         <Tabs.List>
-          <Tabs.Tab value="sales">Regular sales</Tabs.Tab>
-          <Tabs.Tab value="projects">Projects</Tabs.Tab>
+          {canSell ? <Tabs.Tab value="sales">Regular sales</Tabs.Tab> : null}
+          {canOpenProjects ? <Tabs.Tab value="projects">Projects</Tabs.Tab> : null}
         </Tabs.List>
 
+        {canSell ? (
         <Tabs.Panel value="sales" pt="md">
       <Grid gap="md">
         <Grid.Col span={{ base: 12, lg: 8 }}>
@@ -403,17 +426,23 @@ export function PosPage() {
                       </ActionIcon>
                     </Group>
                     <Group justify="space-between" mt={6} align="flex-end">
-                      <NumberInput
-                        label="Unit price"
-                        size="xs"
-                        min={0}
-                        decimalScale={2}
-                        value={item.unitPrice}
-                        onChange={(v) =>
-                          setUnitPrice(item.product.id, Number(v) || 0)
-                        }
-                        w={110}
-                      />
+                      {canChangePrice ? (
+                        <NumberInput
+                          label="Unit price"
+                          size="xs"
+                          min={0}
+                          decimalScale={2}
+                          value={item.unitPrice}
+                          onChange={(v) =>
+                            setUnitPrice(item.product.id, Number(v) || 0)
+                          }
+                          w={110}
+                        />
+                      ) : (
+                        <Text size="xs" c="dimmed">
+                          {formatMoney(item.product.price, store!.currency)}
+                        </Text>
+                      )}
                       <Group gap={6}>
                         <ActionIcon
                           size="sm"
@@ -468,18 +497,20 @@ export function PosPage() {
                 </Text>
                 <Text size="sm">{formatMoney(subtotal, store!.currency)}</Text>
               </Group>
-              <NumberInput
-                label="Invoice discount (%)"
-                min={0}
-                max={100}
-                decimalScale={1}
-                suffix="%"
-                value={invoiceDiscountPercent}
-                onChange={(v) =>
-                  setInvoiceDiscountPercent(v === "" ? "" : Number(v) || 0)
-                }
-              />
-              {discountPercent > 0 ? (
+              {canDiscount ? (
+                <NumberInput
+                  label="Invoice discount (%)"
+                  min={0}
+                  max={100}
+                  decimalScale={1}
+                  suffix="%"
+                  value={invoiceDiscountPercent}
+                  onChange={(v) =>
+                    setInvoiceDiscountPercent(v === "" ? "" : Number(v) || 0)
+                  }
+                />
+              ) : null}
+              {canDiscount && discountPercent > 0 ? (
                 <Group justify="space-between">
                   <Text size="sm" c="dimmed">
                     Discount ({discountPercent}%)
@@ -499,6 +530,7 @@ export function PosPage() {
 
             <Divider my="md" />
 
+            {canLoyalty ? (
             <Group justify="space-between" mb="xs">
               <div>
                 <Text size="sm" fw={600}>
@@ -514,8 +546,9 @@ export function PosPage() {
                 color="green"
               />
             </Group>
+            ) : null}
 
-            {loyaltyActive ? (
+            {canLoyalty && loyaltyActive ? (
               <Stack gap="sm" mb="md">
                 <Select
                   label="Existing loyalty member"
@@ -561,11 +594,11 @@ export function PosPage() {
                   label: paymentLabel(m),
                   value: m,
                 })),
-                { label: "Other", value: "OTHER" },
+                ...(canOtherPayments ? [{ label: "Other", value: "OTHER" }] : []),
               ]}
               mb="sm"
             />
-            {showOtherPayments ? (
+            {canOtherPayments && showOtherPayments ? (
               <Select
                 label="Other payment type"
                 data={OTHER_PAYMENTS.map((m) => ({
@@ -578,7 +611,7 @@ export function PosPage() {
               />
             ) : null}
 
-            {showOtherPayments && otherPayment === "DEBIT" && debitCustomerConfirmed ? (
+            {canOtherPayments && showOtherPayments && otherPayment === "DEBIT" && debitCustomerConfirmed ? (
               <Text size="sm" c="dimmed" mb="md">
                 Debit customer: {debitCustomerName} · {debitCustomerPhone}
               </Text>
@@ -598,10 +631,13 @@ export function PosPage() {
         </Grid.Col>
       </Grid>
         </Tabs.Panel>
+        ) : null}
 
-        <Tabs.Panel value="projects" pt="md">
-          <PosProjectPanel />
-        </Tabs.Panel>
+        {canOpenProjects ? (
+          <Tabs.Panel value="projects" pt="md">
+            <PosProjectPanel />
+          </Tabs.Panel>
+        ) : null}
       </Tabs>
 
       <Modal

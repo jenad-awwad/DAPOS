@@ -17,9 +17,18 @@ function roleFallback(role: UserRole, permission: PermissionKey): boolean {
     );
   }
   if (permission === "vendors.record") return true;
-  return ["dashboard.view", "pos.sales", "orders.view", "calendar.manage"].includes(
-    permission,
-  );
+  return [
+    "dashboard.view",
+    "pos.sales",
+    "pos.discount",
+    "pos.price",
+    "pos.loyalty",
+    "pos.payments.other",
+    "orders.view",
+    "orders.items",
+    "calendar.view",
+    "calendar.manage",
+  ].includes(permission);
 }
 
 export function userCanAccess(

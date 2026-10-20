@@ -5,16 +5,26 @@ export type UserRole = "ADMIN" | "MANAGER" | "CASHIER";
 export type PermissionKey =
   | "dashboard.view"
   | "pos.sales"
+  | "pos.discount"
+  | "pos.price"
+  | "pos.loyalty"
+  | "pos.payments.other"
   | "pos.projects"
+  | "calendar.view"
   | "calendar.manage"
   | "orders.view"
+  | "orders.items"
   | "orders.void"
   | "inventory.view"
   | "inventory.manage"
+  | "products.view"
   | "products.manage"
+  | "categories.view"
   | "categories.manage"
+  | "customers.view"
   | "customers.manage"
   | "stock.view"
+  | "stock.adjust"
   | "staff.manage"
   | "roles.manage"
   | "settings.manage"
@@ -186,6 +196,8 @@ export type CalendarEvent = {
   endsAt?: string | null;
   allDay: boolean;
   description?: string | null;
+  attachmentKey?: string | null;
+  attachmentUrl?: string | null;
   customerName?: string | null;
   customerPhone?: string | null;
   price?: number | null;
@@ -247,6 +259,8 @@ export type Order = {
   discountTotal: number;
   total: number;
   notes?: string | null;
+  attachmentKey?: string | null;
+  attachmentUrl?: string | null;
   completedAt?: string | null;
   createdAt?: string;
   items?: OrderItem[];

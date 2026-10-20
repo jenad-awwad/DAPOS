@@ -1,9 +1,11 @@
-import type { UserRole } from "@prisma/client";
+import { Prisma, type UserRole } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
 import {
   DEFAULT_ROLE_POLICIES,
   parsePermissionList,
+  readStoredPermissions,
   sanitizeRolePolicies,
+  stampPermissionList,
   withVendorPermissionDefaults,
   type PermissionKey,
 } from "../lib/permissions.js";
@@ -38,7 +40,7 @@ function serializeStoreRole(role: {
   updatedAt: Date;
 }): StoreRoleRecord {
   const permissions =
-    parsePermissionList(role.permissions) ??
+    parsePermissionList(role.permissions, role.systemCode) ??
     (role.systemCode ? DEFAULT_ROLE_POLICIES[role.systemCode] : []);
 
   return {
@@ -85,7 +87,7 @@ export async function ensureStoreRoles(storeId: string): Promise<StoreRoleRecord
         name: SYSTEM_ROLE_NAMES[systemCode],
         isSystem: true,
         systemCode,
-        permissions: policies[systemCode],
+        permissions: stampPermissionList(policies[systemCode]),
       },
     });
   }
@@ -97,10 +99,13 @@ export async function ensureStoreRoles(storeId: string): Promise<StoreRoleRecord
 
   for (const role of roles) {
     if (!role.systemCode) continue;
-    const current =
-      parsePermissionList(role.permissions) ?? DEFAULT_ROLE_POLICIES[role.systemCode];
+    const stored = readStoredPermissions(role.permissions);
+    if (stored?.configured) continue;
+    const current = stored?.keys ?? DEFAULT_ROLE_POLICIES[role.systemCode];
     const next = withVendorPermissionDefaults(role.systemCode, current);
-    if (next.length === current.length) continue;
+    if (next.length === current.length && next.every((key) => current.includes(key))) {
+      continue;
+    }
     await prisma.storeRole.update({
       where: { id: role.id },
       data: { permissions: next },
@@ -161,7 +166,7 @@ export async function createStoreRole(
       storeId,
       name,
       isSystem: false,
-      permissions: input.permissions,
+      permissions: stampPermissionList(input.permissions),
     },
   });
 
@@ -203,23 +208,39 @@ export async function updateStoreRole(
     where: { id: roleId },
     data: {
       ...(input.name !== undefined ? { name: input.name.trim() } : {}),
-      ...(input.permissions !== undefined ? { permissions: input.permissions } : {}),
+      ...(input.permissions !== undefined
+        ? {
+            permissions: stampPermissionList(
+              existing.systemCode === "ADMIN"
+                ? [...new Set([...input.permissions, "roles.manage" as const])]
+                : input.permissions,
+            ),
+          }
+        : {}),
     },
   });
 
   if (existing.isSystem && existing.systemCode && input.permissions !== undefined) {
-    const policies = sanitizeRolePolicies(
-      (
-        await prisma.store.findUnique({
-          where: { id: storeId },
-          select: { rolePolicies: true },
-        })
-      )?.rolePolicies,
-    );
-    policies[existing.systemCode] = input.permissions;
+    const saved =
+      existing.systemCode === "ADMIN"
+        ? [...new Set<PermissionKey>([...input.permissions, "roles.manage"])]
+        : input.permissions;
+    const currentPolicies = (
+      await prisma.store.findUnique({
+        where: { id: storeId },
+        select: { rolePolicies: true },
+      })
+    )?.rolePolicies;
+    const record =
+      currentPolicies &&
+      typeof currentPolicies === "object" &&
+      !Array.isArray(currentPolicies)
+        ? { ...(currentPolicies as Record<string, unknown>) }
+        : { ...sanitizeRolePolicies(null) };
+    record[existing.systemCode] = stampPermissionList(saved);
     await prisma.store.update({
       where: { id: storeId },
-      data: { rolePolicies: policies },
+      data: { rolePolicies: record as Prisma.InputJsonValue },
     });
   }
 

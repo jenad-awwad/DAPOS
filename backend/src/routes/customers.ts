@@ -4,7 +4,7 @@ import { prisma } from "../lib/prisma.js";
 import { phoneCandidates } from "../lib/phone.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
-import { requireManager } from "../middleware/roles.js";
+import { requireAnyPermission } from "../middleware/permissions.js";
 import { listCustomersWithStats } from "../services/customers.js";
 
 const createCustomerSchema = z.object({
@@ -95,7 +95,7 @@ customerRoutes.get("/", requireAuth, async (c) => {
   return c.json({ customers: serialize(customers) });
 });
 
-customerRoutes.post("/enroll", requireAuth, async (c) => {
+customerRoutes.post("/enroll", requireAuth, requireAnyPermission("pos.loyalty"), async (c) => {
   const { storeId } = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = enrollSchema.safeParse(body);
@@ -214,7 +214,7 @@ customerRoutes.get("/:id", requireAuth, async (c) => {
   return c.json({ customer: serialize(customer) });
 });
 
-customerRoutes.post("/", requireAuth, requireManager, async (c) => {
+customerRoutes.post("/", requireAuth, requireAnyPermission("customers.manage"), async (c) => {
   const { storeId } = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = createCustomerSchema.safeParse(body);
@@ -238,7 +238,7 @@ customerRoutes.post("/", requireAuth, requireManager, async (c) => {
   return c.json({ customer: serialize(customer) }, 201);
 });
 
-customerRoutes.patch("/:id", requireAuth, requireManager, async (c) => {
+customerRoutes.patch("/:id", requireAuth, requireAnyPermission("customers.manage"), async (c) => {
   const { storeId } = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = updateCustomerSchema.safeParse(body);
@@ -277,7 +277,7 @@ customerRoutes.patch("/:id", requireAuth, requireManager, async (c) => {
   return c.json({ customer: serialize(customer) });
 });
 
-customerRoutes.delete("/:id", requireAuth, requireManager, async (c) => {
+customerRoutes.delete("/:id", requireAuth, requireAnyPermission("customers.manage"), async (c) => {
   const { storeId } = c.get("auth");
 
   const existing = await prisma.customer.findFirst({

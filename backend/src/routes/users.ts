@@ -6,6 +6,7 @@ import { phoneCandidates } from "../lib/phone.js";
 import {
   isPermissionKey,
   parsePermissionList,
+  stampPermissionList,
 } from "../lib/permissions.js";
 import { serialize } from "../lib/serialize.js";
 import {
@@ -14,7 +15,7 @@ import {
   syncUserRoleEnum,
 } from "../services/store-roles.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
-import { requireAdmin, requireManager } from "../middleware/roles.js";
+import { requireAnyPermission } from "../middleware/permissions.js";
 
 const permissionSchema = z.string().refine(isPermissionKey, {
   message: "Invalid permission key",
@@ -51,7 +52,7 @@ function sanitizeUser(user: {
   updatedAt: Date;
   storeRole?: { id: string; name: string; systemCode: UserRole | null } | null;
 }) {
-  const customPolicies = parsePermissionList(user.customPolicies);
+  const customPolicies = parsePermissionList(user.customPolicies, user.role);
   return {
     id: user.id,
     name: user.name,
@@ -112,7 +113,7 @@ userRoutes.get("/cashiers", requireAuth, async (c) => {
   return c.json({ users: serialize(users) });
 });
 
-userRoutes.get("/", requireAuth, requireManager, async (c) => {
+userRoutes.get("/", requireAuth, requireAnyPermission("staff.manage"), async (c) => {
   const { storeId } = c.get("auth");
 
   const users = await prisma.user.findMany({
@@ -124,7 +125,7 @@ userRoutes.get("/", requireAuth, requireManager, async (c) => {
   return c.json({ users: serialize(users.map(sanitizeUser)) });
 });
 
-userRoutes.post("/", requireAuth, requireAdmin, async (c) => {
+userRoutes.post("/", requireAuth, requireAnyPermission("staff.manage"), async (c) => {
   const { storeId } = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = createUserSchema.safeParse(body);
@@ -172,7 +173,7 @@ userRoutes.post("/", requireAuth, requireAdmin, async (c) => {
   return c.json({ user: serialize(sanitizeUser(user)) }, 201);
 });
 
-userRoutes.patch("/:id", requireAuth, requireAdmin, async (c) => {
+userRoutes.patch("/:id", requireAuth, requireAnyPermission("staff.manage"), async (c) => {
   const { storeId, sub } = c.get("auth");
   const targetId = c.req.param("id");
   const body = await c.req.json().catch(() => null);
@@ -239,7 +240,7 @@ userRoutes.patch("/:id", requireAuth, requireAdmin, async (c) => {
             customPolicies:
               parsed.data.customPolicies === null
                 ? Prisma.JsonNull
-                : parsed.data.customPolicies,
+                : stampPermissionList(parsed.data.customPolicies),
           }
         : {}),
     },

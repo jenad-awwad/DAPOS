@@ -4,7 +4,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
-import { requireAdmin } from "../middleware/roles.js";
+import { requireAnyPermission } from "../middleware/permissions.js";
 
 const updateStoreSchema = z.object({
   name: z.string().min(1).max(200).optional(),
@@ -33,7 +33,7 @@ storeRoutes.get("/", requireAuth, async (c) => {
   });
 });
 
-storeRoutes.patch("/", requireAuth, requireAdmin, async (c) => {
+storeRoutes.patch("/", requireAuth, requireAnyPermission("settings.manage"), async (c) => {
   const { storeId } = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = updateStoreSchema.safeParse(body);

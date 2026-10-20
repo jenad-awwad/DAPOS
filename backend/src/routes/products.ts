@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
-import { requireManager } from "../middleware/roles.js";
+import { requireAnyPermission } from "../middleware/permissions.js";
 import {
   createBasicProduct,
   setProductPricing,
@@ -166,7 +166,7 @@ productRoutes.get("/barcode/:barcode", requireAuth, async (c) => {
   return c.json({ product: serialize(product) });
 });
 
-productRoutes.post("/", requireAuth, requireManager, async (c) => {
+productRoutes.post("/", requireAuth, requireAnyPermission("products.manage"), async (c) => {
   const { storeId } = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = createBasicProductSchema.safeParse(body);
@@ -212,7 +212,7 @@ productRoutes.post("/", requireAuth, requireManager, async (c) => {
   }
 });
 
-productRoutes.patch("/:id/pricing", requireAuth, requireManager, async (c) => {
+productRoutes.patch("/:id/pricing", requireAuth, requireAnyPermission("products.manage"), async (c) => {
   const { storeId } = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = setPricingSchema.safeParse(body);
@@ -251,7 +251,7 @@ productRoutes.get("/:id", requireAuth, async (c) => {
   return c.json({ product: serialize(product) });
 });
 
-productRoutes.patch("/:id", requireAuth, requireManager, async (c) => {
+productRoutes.patch("/:id", requireAuth, requireAnyPermission("products.manage"), async (c) => {
   const { storeId } = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = updateProductSchema.safeParse(body);
@@ -335,7 +335,7 @@ productRoutes.patch("/:id", requireAuth, requireManager, async (c) => {
   }
 });
 
-productRoutes.delete("/:id", requireAuth, requireManager, async (c) => {
+productRoutes.delete("/:id", requireAuth, requireAnyPermission("products.manage"), async (c) => {
   const { storeId } = c.get("auth");
 
   const existing = await prisma.product.findFirst({

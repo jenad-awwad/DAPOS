@@ -249,6 +249,7 @@ model Order {
   discountTotal Decimal     @default(0) @db.Decimal(12, 2)
   total         Decimal     @default(0) @db.Decimal(12, 2)
   notes         String?
+  attachmentKey String?
   orderType           OrderType   @default(REGULAR)
   projectTitle        String?
   projectSellQuantity Decimal?    @db.Decimal(12, 3)
@@ -301,6 +302,7 @@ model CalendarEvent {
   endsAt        DateTime?
   allDay        Boolean             @default(false)
   description   String?
+  attachmentKey String?
   customerName  String?
   customerPhone String?
   price         Decimal?            @db.Decimal(12, 2)
