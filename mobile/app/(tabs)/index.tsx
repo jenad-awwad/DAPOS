@@ -57,7 +57,7 @@ export default function HomeScreen() {
   const [orderCount, setOrderCount] = useState(0);
   const [salesTotal, setSalesTotal] = useState(0);
   const [itemsSold, setItemsSold] = useState(0);
-  const [profit, setProfit] = useState(0);
+  const [profit, setProfit] = useState<number | null>(0);
 
   const load = useCallback(async () => {
     const { from, to } = todayRange();
@@ -73,7 +73,11 @@ export default function HomeScreen() {
       completed.reduce((sum, order) => sum + Number(order.total), 0),
     );
     setItemsSold(reportRes.summary.quantitySold);
-    setProfit(reportRes.summary.totalRevenue - reportRes.summary.totalCost);
+    setProfit(
+      reportRes.summary.totalCost != null
+        ? reportRes.summary.totalRevenue - reportRes.summary.totalCost
+        : null,
+    );
   }, []);
 
   useEffect(() => {
@@ -214,7 +218,7 @@ export default function HomeScreen() {
             />
             <MetricCard
               label="Profit"
-              value={formatMoney(profit, currency)}
+              value={profit != null ? formatMoney(profit, currency) : "—"}
               icon="trending-up-outline"
               tint={colors.blue}
               bg={colors.blueSoft}

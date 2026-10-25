@@ -12,6 +12,7 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:push": "prisma db push",
     "db:seed": "tsx prisma/seed.ts",
+    "images:migrate": "tsx scripts/migrate-product-images.ts",
     "db:studio": "prisma studio"
   },
   "dependencies": {

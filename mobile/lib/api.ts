@@ -345,7 +345,8 @@ export function fetchItemSalesReport(params?: {
     summary: {
       quantitySold: number;
       totalRevenue: number;
-      totalCost: number;
+      /** Null when the current user is not allowed to see product costs. */
+      totalCost: number | null;
     };
   }>(`/orders/reports/item-sales${qs ? `?${qs}` : ""}`);
 }

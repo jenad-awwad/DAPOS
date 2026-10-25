@@ -302,6 +302,7 @@ export type ItemSalesReport = {
   summary: {
     quantitySold: number;
     totalRevenue: number;
-    totalCost: number;
+    /** Null when the current user is not allowed to see product costs. */
+    totalCost: number | null;
   };
 };

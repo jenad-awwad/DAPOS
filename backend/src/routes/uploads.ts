@@ -1,8 +1,12 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import {
+  isProductImageKey,
+  isRemoteStorageConfigured,
+  isSafeAttachmentKey,
   parseImageDataUrl,
   readLocalAttachment,
+  resolveAttachmentUrl,
   uploadVendorAttachment,
 } from "../lib/object-storage.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
@@ -17,14 +21,30 @@ const vendorAttachmentSchema = z.object({
 uploadRoutes.get("/files/*", async (c) => {
   const pathname = new URL(c.req.url).pathname;
   const key = decodeURIComponent(pathname.replace(/^\/uploads\/files\//, ""));
+  if (!isSafeAttachmentKey(key)) {
+    return c.json({ error: "File not found" }, 404);
+  }
+
+  // Stored paths are stable (`/uploads/files/<key>`) regardless of where the
+  // bytes live. With S3 configured, hand the browser the real object URL.
+  if (isRemoteStorageConfigured()) {
+    const target = await resolveAttachmentUrl(key, c.req.url);
+    return c.redirect(target ?? "", 302);
+  }
+
   const file = await readLocalAttachment(key);
   if (!file) {
     return c.json({ error: "File not found" }, 404);
   }
 
+  // Keys are random UUIDs and never rewritten, so product images can be cached hard.
+  const cacheControl = isProductImageKey(key)
+    ? "public, max-age=31536000, immutable"
+    : "private, max-age=86400";
+
   return c.body(new Uint8Array(file.buffer), 200, {
     "Content-Type": file.contentType,
-    "Cache-Control": "private, max-age=86400",
+    "Cache-Control": cacheControl,
   });
 });
 

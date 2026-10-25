@@ -26,7 +26,7 @@ export default function ReportsScreen() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [salesTotal, setSalesTotal] = useState(0);
   const [itemsSold, setItemsSold] = useState(0);
-  const [profit, setProfit] = useState(0);
+  const [profit, setProfit] = useState<number | null>(0);
 
   const load = useCallback(async () => {
     const { from, to } = todayRange();
@@ -38,7 +38,11 @@ export default function ReportsScreen() {
     setOrders(completed);
     setSalesTotal(completed.reduce((sum, o) => sum + Number(o.total), 0));
     setItemsSold(reportRes.summary.quantitySold);
-    setProfit(reportRes.summary.totalRevenue - reportRes.summary.totalCost);
+    setProfit(
+      reportRes.summary.totalCost != null
+        ? reportRes.summary.totalRevenue - reportRes.summary.totalCost
+        : null,
+    );
   }, []);
 
   useEffect(() => {
@@ -86,7 +90,7 @@ export default function ReportsScreen() {
               <View style={styles.summaryRow}>
                 <Text style={styles.summaryLabel}>Profit</Text>
                 <Text style={[styles.summaryValue, styles.profit]}>
-                  {formatMoney(profit, currency)}
+                  {profit != null ? formatMoney(profit, currency) : "—"}
                 </Text>
               </View>
             </View>

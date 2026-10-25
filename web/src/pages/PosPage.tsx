@@ -713,6 +713,8 @@ function SimpleProductGrid({
           <img
             src={product.imageUrl || "https://placehold.co/160x160/e2e8f0/64748b?text=No+Image"}
             alt={product.name}
+            loading="lazy"
+            decoding="async"
           />
           <span>{product.name}</span>
           <strong>{formatMoney(product.price, currency)}</strong>

@@ -40,8 +40,8 @@ export default function AddProductScreen() {
   const [price, setPrice] = useState("");
   const [cost, setCost] = useState("");
 
-  const canManage = user?.role === "ADMIN" || user?.role === "MANAGER";
-  const canSetPrice = userCanAccess(user, ["products.price", "products.manage"]) || canManage;
+  const canCreateDetails = userCanAccess(user, ["products.details", "products.manage"]);
+  const canSetPrice = userCanAccess(user, ["products.price", "products.manage"]);
 
   useEffect(() => {
     fetchCategories()
@@ -153,10 +153,12 @@ export default function AddProductScreen() {
     }
   };
 
-  if (!canManage) {
+  if (!canCreateDetails) {
     return (
       <View style={styles.center}>
-        <Text style={styles.errorText}>Managers only</Text>
+        <Text style={styles.errorText}>
+          You do not have permission to add products.
+        </Text>
       </View>
     );
   }

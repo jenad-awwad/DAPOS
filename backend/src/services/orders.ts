@@ -324,6 +324,12 @@ export type ItemSalesLine = {
   soldAt: string;
 };
 
+export type ItemSalesReport = {
+  items: ItemSalesLine[];
+  /** `totalCost` is null when the caller is not allowed to see product costs. */
+  summary: { quantitySold: number; totalRevenue: number; totalCost: number | null };
+};
+
 export async function getItemSalesReport(
   storeId: string,
   options: {
@@ -331,12 +337,12 @@ export async function getItemSalesReport(
     cashierId?: string;
     dateFrom?: Date;
     dateTo?: Date;
+    /** Defaults to true; pass false to strip product costs from the report. */
+    includeCost?: boolean;
   } = {},
-): Promise<{
-  items: ItemSalesLine[];
-  summary: { quantitySold: number; totalRevenue: number; totalCost: number };
-}> {
+): Promise<ItemSalesReport> {
   const { search, cashierId, dateFrom, dateTo } = options;
+  const includeCost = options.includeCost ?? true;
 
   const lineItems = await prisma.orderItem.findMany({
     where: {
@@ -387,7 +393,7 @@ export async function getItemSalesReport(
 
   const items: ItemSalesLine[] = lineItems.map((line) => {
     const soldAt = line.order.completedAt ?? line.order.createdAt;
-    const unitCost = line.product?.cost?.toNumber() ?? null;
+    const unitCost = includeCost ? (line.product?.cost?.toNumber() ?? null) : null;
 
     return {
       id: line.id,
@@ -417,5 +423,8 @@ export async function getItemSalesReport(
     { quantitySold: 0, totalRevenue: 0, totalCost: 0 },
   );
 
-  return { items, summary };
+  return {
+    items,
+    summary: { ...summary, totalCost: includeCost ? summary.totalCost : null },
+  };
 }

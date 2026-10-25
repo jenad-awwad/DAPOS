@@ -6,12 +6,10 @@ export function downloadWorkbook(workbook: XLSX.WorkBook, filename: string) {
     type: "array",
   }) as ArrayBuffer | number[] | Uint8Array;
 
-  const binary =
-    bytes instanceof ArrayBuffer
-      ? new Uint8Array(bytes)
-      : bytes instanceof Uint8Array
-        ? bytes
-        : Uint8Array.from(bytes);
+  // Copy into a fresh Uint8Array so the backing buffer is a plain ArrayBuffer
+  // (not SharedArrayBuffer), which is what Blob accepts under strict DOM typings.
+  const binary: Uint8Array<ArrayBuffer> =
+    bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : Uint8Array.from(bytes);
 
   const blob = new Blob([binary], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

@@ -273,7 +273,9 @@ export function ProductsAdminPage() {
               categoryId: values.categoryId || null,
             }
           : {}),
-        ...(canSetPrice ? { price: values.price, cost: values.cost } : {}),
+        // Pricing is only sent once a positive price is entered. A product that is
+        // still "pending pricing" has price 0, which the server rejects as a price.
+        ...(canSetPrice && values.price > 0 ? { price: values.price, cost: values.cost } : {}),
       }),
     onSuccess: () => {
       invalidateProducts();

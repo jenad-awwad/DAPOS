@@ -39,6 +39,7 @@ export function ProductCard({ product, currency, onClick, compact }: Props) {
             src={product.imageUrl ?? undefined}
             alt={product.name}
             h={compact ? 100 : 130}
+            loading="lazy"
             fallbackSrc="https://placehold.co/400x300/e2e8f0/64748b?text=No+Image"
           />
         </Card.Section>

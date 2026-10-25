@@ -61,6 +61,11 @@ export function isObjectStorageConfigured(): boolean {
   return true;
 }
 
+/** True when files live in S3-compatible storage rather than on the local disk. */
+export function isRemoteStorageConfigured(): boolean {
+  return getClient() != null;
+}
+
 function extensionFor(contentType: string): string {
   if (contentType === "image/png") return "png";
   if (contentType === "image/webp") return "webp";
@@ -68,15 +73,22 @@ function extensionFor(contentType: string): string {
   return "jpg";
 }
 
-function buildObjectKey(storeId: string, ext: string): string {
-  return `stores/${storeId}/vendor-attachments/${randomUUID()}.${ext}`;
+/** Folders under `stores/<storeId>/` that uploaded files may be written to. */
+type StorageFolder = "vendor-attachments" | "product-images";
+
+function buildObjectKey(storeId: string, folder: StorageFolder, ext: string): string {
+  return `stores/${storeId}/${folder}/${randomUUID()}.${ext}`;
 }
 
 export function isSafeAttachmentKey(key: string): boolean {
   if (!key || key.includes("..") || key.includes("\\")) return false;
-  return /^stores\/[a-zA-Z0-9_-]+\/vendor-attachments\/[a-zA-Z0-9._-]+$/.test(
+  return /^stores\/[a-zA-Z0-9_-]+\/(vendor-attachments|product-images)\/[a-zA-Z0-9._-]+$/.test(
     key,
   );
+}
+
+export function isProductImageKey(key: string): boolean {
+  return isSafeAttachmentKey(key) && key.includes("/product-images/");
 }
 
 function localFilePath(key: string): string {
@@ -88,15 +100,34 @@ function localFilePath(key: string): string {
   return resolved;
 }
 
-async function uploadLocal(
-  buffer: Buffer,
-  storeId: string,
-  ext: string,
-): Promise<string> {
-  const key = buildObjectKey(storeId, ext);
+async function uploadLocal(buffer: Buffer, key: string): Promise<string> {
   const filePath = localFilePath(key);
   await mkdir(dirname(filePath), { recursive: true });
   await writeFile(filePath, buffer);
+  return key;
+}
+
+async function uploadToFolder(
+  buffer: Buffer,
+  contentType: string,
+  storeId: string,
+  folder: StorageFolder,
+): Promise<string> {
+  const key = buildObjectKey(storeId, folder, extensionFor(contentType));
+  const ctx = getClient();
+  if (!ctx) {
+    return uploadLocal(buffer, key);
+  }
+
+  await ctx.client.send(
+    new PutObjectCommand({
+      Bucket: ctx.config.bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: contentType,
+    }),
+  );
+
   return key;
 }
 
@@ -121,28 +152,20 @@ export async function readLocalAttachment(
   }
 }
 
-export async function uploadVendorAttachment(
+export function uploadVendorAttachment(
   buffer: Buffer,
   contentType: string,
   storeId: string,
 ): Promise<string> {
-  const ext = extensionFor(contentType);
-  const ctx = getClient();
-  if (!ctx) {
-    return uploadLocal(buffer, storeId, ext);
-  }
+  return uploadToFolder(buffer, contentType, storeId, "vendor-attachments");
+}
 
-  const key = buildObjectKey(storeId, ext);
-  await ctx.client.send(
-    new PutObjectCommand({
-      Bucket: ctx.config.bucket,
-      Key: key,
-      Body: buffer,
-      ContentType: contentType,
-    }),
-  );
-
-  return key;
+export function uploadProductImage(
+  buffer: Buffer,
+  contentType: string,
+  storeId: string,
+): Promise<string> {
+  return uploadToFolder(buffer, contentType, storeId, "product-images");
 }
 
 export function apiPublicOrigin(requestUrl?: string): string {

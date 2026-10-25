@@ -4,7 +4,9 @@ import { prisma } from "../lib/prisma.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
 import { loadUserPermissions, requireAnyPermission } from "../middleware/permissions.js";
+import { canViewCost, withCostVisibility } from "../lib/cost-visibility.js";
 import { userHasPermission } from "../lib/permissions.js";
+import { persistProductImage, withProductImageUrl } from "../lib/product-images.js";
 import {
   assignPricingRequest,
   createBasicProduct,
@@ -83,9 +85,13 @@ const assignPricingRequestSchema = z.object({
   assignedToId: z.string().min(1).nullable(),
 });
 
-function withoutCost<T extends Record<string, unknown>>(product: T, showCost: boolean) {
-  if (showCost) return product;
-  return { ...product, cost: null };
+/** Serializes a product for the response: absolute image URL, cost hidden when not allowed. */
+function productOut<T extends { imageUrl: string; cost?: unknown }>(
+  product: T,
+  requestUrl: string,
+  showCost = true,
+): T {
+  return withCostVisibility(withProductImageUrl(serialize(product), requestUrl), showCost);
 }
 
 async function resolveSupplierLink(
@@ -115,10 +121,7 @@ export const productRoutes = new Hono<AppEnv>();
 productRoutes.get("/", requireAuth, async (c) => {
   const auth = c.get("auth");
   const { storeId } = auth;
-  const permissions = await loadUserPermissions(storeId, auth.sub);
-  const showCost =
-    userHasPermission(permissions, "products.price") ||
-    userHasPermission(permissions, "products.manage");
+  const showCost = canViewCost(await loadUserPermissions(storeId, auth.sub));
   const parsed = listProductsQuerySchema.safeParse({
     search: c.req.query("search"),
     name: c.req.query("name"),
@@ -189,14 +192,12 @@ productRoutes.get("/", requireAuth, async (c) => {
       )
     : products;
 
-  const productsOut = serialize(filtered).map((product) =>
-    withoutCost(product as Record<string, unknown>, showCost),
-  );
+  const productsOut = filtered.map((product) => productOut(product, c.req.url, showCost));
   return c.json({ products: productsOut });
 });
 
 productRoutes.get("/barcode/:barcode", requireAuth, async (c) => {
-  const { storeId } = c.get("auth");
+  const { storeId, sub } = c.get("auth");
   const barcode = c.req.param("barcode");
 
   const product = await prisma.product.findFirst({
@@ -208,7 +209,8 @@ productRoutes.get("/barcode/:barcode", requireAuth, async (c) => {
     return c.json({ error: "Product not found" }, 404);
   }
 
-  return c.json({ product: serialize(product) });
+  const showCost = canViewCost(await loadUserPermissions(storeId, sub));
+  return c.json({ product: productOut(product, c.req.url, showCost) });
 });
 
 productRoutes.get(
@@ -222,7 +224,10 @@ productRoutes.get(
       listPricingAssignees(storeId),
     ]);
     return c.json({
-      requests: serialize(requests),
+      requests: serialize(requests).map((request) => ({
+        ...request,
+        product: withProductImageUrl(request.product, c.req.url),
+      })),
       assignees,
     });
   },
@@ -246,7 +251,10 @@ productRoutes.patch(
         c.req.param("id"),
         parsed.data.assignedToId,
       );
-      return c.json({ request: serialize(request) });
+      const out = serialize(request);
+      return c.json({
+        request: { ...out, product: withProductImageUrl(out.product, c.req.url) },
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not assign request";
       return c.json({ error: message }, 400);
@@ -301,14 +309,14 @@ productRoutes.post(
       name: parsed.data.name,
       supplier: supplierLink.supplier,
       vendorId: supplierLink.vendorId,
-      imageUrl: parsed.data.imageUrl,
+      imageUrl: await persistProductImage(parsed.data.imageUrl, storeId),
       onStock: parsed.data.onStock,
       lowStockAt: parsed.data.lowStockAt,
       categoryId: parsed.data.categoryId ?? null,
       description: parsed.data.description ?? null,
       requestedById: sub,
     });
-    return c.json({ product: serialize(product) }, 201);
+    return c.json({ product: productOut(product, c.req.url) }, 201);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not create product";
     return c.json({ error: message }, 400);
@@ -336,7 +344,7 @@ productRoutes.patch(
       parsed.data.cost,
       sub,
     );
-    return c.json({ product: serialize(product) });
+    return c.json({ product: productOut(product, c.req.url) });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not set pricing";
     return c.json({ error: message }, 400);
@@ -344,7 +352,7 @@ productRoutes.patch(
 });
 
 productRoutes.get("/:id", requireAuth, async (c) => {
-  const { storeId } = c.get("auth");
+  const { storeId, sub } = c.get("auth");
   const id = c.req.param("id");
 
   const product = await prisma.product.findFirst({
@@ -356,7 +364,8 @@ productRoutes.get("/:id", requireAuth, async (c) => {
     return c.json({ error: "Product not found" }, 404);
   }
 
-  return c.json({ product: serialize(product) });
+  const showCost = canViewCost(await loadUserPermissions(storeId, sub));
+  return c.json({ product: productOut(product, c.req.url, showCost) });
 });
 
 productRoutes.patch(
@@ -447,6 +456,16 @@ productRoutes.patch(
     linkedSupplier = supplierLink;
   }
 
+  let storedImageUrl: string | undefined;
+  if (parsed.data.imageUrl !== undefined) {
+    try {
+      storedImageUrl = await persistProductImage(parsed.data.imageUrl, storeId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not save product photo";
+      return c.json({ error: message }, 400);
+    }
+  }
+
   try {
     const product = await prisma.product.update({
       where: { id: existing.id },
@@ -456,7 +475,7 @@ productRoutes.patch(
         ...(parsed.data.description !== undefined
           ? { description: parsed.data.description }
           : {}),
-        ...(parsed.data.imageUrl !== undefined ? { imageUrl: parsed.data.imageUrl } : {}),
+        ...(storedImageUrl !== undefined ? { imageUrl: storedImageUrl } : {}),
         ...(linkedSupplier
           ? { supplier: linkedSupplier.supplier, vendorId: linkedSupplier.vendorId }
           : parsed.data.supplier !== undefined
@@ -488,7 +507,7 @@ productRoutes.patch(
         },
       });
     }
-    return c.json({ product: serialize(product) });
+    return c.json({ product: productOut(product, c.req.url) });
   } catch {
     return c.json({ error: "SKU already exists" }, 400);
   }
@@ -511,5 +530,5 @@ productRoutes.delete("/:id", requireAuth, requireAnyPermission("products.manage"
     include: { category: true, vendor: { select: { id: true, name: true } } },
   });
 
-  return c.json({ product: serialize(product) });
+  return c.json({ product: productOut(product, c.req.url) });
 });

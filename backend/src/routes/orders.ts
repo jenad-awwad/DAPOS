@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { CalendarEventType, OrderStatus, OrderType, PaymentMethod } from "@prisma/client";
 import { z } from "zod";
+import { canViewCost } from "../lib/cost-visibility.js";
 import { zDateTimeString } from "../lib/datetime.js";
 import { withAttachmentUrl } from "../lib/object-storage.js";
 import { serialize } from "../lib/serialize.js";
@@ -186,6 +187,7 @@ orderRoutes.get("/reports/item-sales", requireAuth, async (c) => {
     cashierId: parsed.data.cashierId,
     dateFrom: parsed.data.dateFrom ? new Date(parsed.data.dateFrom) : undefined,
     dateTo: parsed.data.dateTo ? new Date(parsed.data.dateTo) : undefined,
+    includeCost: canViewCost(permissions),
   });
 
   return c.json(serialize(report));

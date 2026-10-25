@@ -307,8 +307,11 @@ export function DashboardPage() {
   const uniqueCustomers = new Set(
     saleOrders.map((order) => order.customer?.id).filter(Boolean),
   ).size;
-  const itemProfit =
-    (itemSummary?.totalRevenue ?? 0) - (itemSummary?.totalCost ?? 0);
+  // totalCost is null when this user may not see product costs; margin is hidden too.
+  const canSeeItemCost = canViewItemSales && itemSummary?.totalCost != null;
+  const itemProfit = canSeeItemCost
+    ? (itemSummary?.totalRevenue ?? 0) - (itemSummary?.totalCost ?? 0)
+    : 0;
 
   const salesStats = [
     {
@@ -354,7 +357,7 @@ export function DashboardPage() {
     },
     {
       label: "Product cost",
-      value: canViewItemSales
+      value: canSeeItemCost
         ? formatMoney(itemSummary?.totalCost ?? 0, store!.currency)
         : "—",
       icon: IconPackage,
@@ -362,7 +365,7 @@ export function DashboardPage() {
     },
     {
       label: "Product margin",
-      value: canViewItemSales ? formatMoney(itemProfit, store!.currency) : "—",
+      value: canSeeItemCost ? formatMoney(itemProfit, store!.currency) : "—",
       icon: IconCash,
       color: itemProfit >= 0 ? "teal" : "red",
     },

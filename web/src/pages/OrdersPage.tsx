@@ -527,7 +527,9 @@ export function OrdersPage() {
                     Total cost
                   </Text>
                   <Text fw={700} size="xl">
-                    {formatMoney(itemSummary.totalCost, store!.currency)}
+                    {itemSummary.totalCost != null
+                      ? formatMoney(itemSummary.totalCost, store!.currency)
+                      : "—"}
                   </Text>
                 </Card>
               </Group>
