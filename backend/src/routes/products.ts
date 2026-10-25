@@ -3,9 +3,13 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
-import { requireAnyPermission } from "../middleware/permissions.js";
+import { loadUserPermissions, requireAnyPermission } from "../middleware/permissions.js";
+import { userHasPermission } from "../lib/permissions.js";
 import {
+  assignPricingRequest,
   createBasicProduct,
+  listPricingAssignees,
+  listPricingRequests,
   setProductPricing,
 } from "../services/products.js";
 
@@ -32,7 +36,8 @@ const createBasicProductSchema = z.object({
   sku: z.string().max(50).optional().nullable(),
   barcode: z.string().min(1).max(50).optional().nullable(),
   name: z.string().min(1).max(200),
-  supplier: z.string().min(1).max(200),
+  supplier: z.string().min(1).max(200).optional(),
+  vendorId: z.string().min(1).optional().nullable(),
   imageUrl: imageUrlSchema,
   onStock: z.number().int().min(0).optional(),
   lowStockAt: z.number().int().min(0).optional().nullable(),
@@ -51,6 +56,7 @@ const updateProductSchema = z.object({
   description: z.string().max(1000).optional().nullable(),
   imageUrl: imageUrlSchema.optional(),
   supplier: z.string().min(1).max(200).optional(),
+  vendorId: z.string().min(1).nullable().optional(),
   price: z.number().positive().optional(),
   cost: z.number().min(0).optional().nullable(),
   onStock: z.number().int().min(0).optional(),
@@ -73,10 +79,46 @@ const listProductsQuerySchema = z.object({
   dateTo: z.string().datetime().optional(),
 });
 
+const assignPricingRequestSchema = z.object({
+  assignedToId: z.string().min(1).nullable(),
+});
+
+function withoutCost<T extends Record<string, unknown>>(product: T, showCost: boolean) {
+  if (showCost) return product;
+  return { ...product, cost: null };
+}
+
+async function resolveSupplierLink(
+  storeId: string,
+  vendorId: string | null | undefined,
+  supplier: string | undefined,
+): Promise<{ vendorId: string | null; supplier: string } | { error: string }> {
+  if (vendorId) {
+    const vendor = await prisma.vendor.findFirst({
+      where: { id: vendorId, storeId },
+    });
+    if (!vendor) return { error: "Supplier not found" };
+    return { vendorId: vendor.id, supplier: vendor.name };
+  }
+
+  const name = supplier?.trim() ?? "";
+  if (!name) return { error: "Supplier is required" };
+  const normalizedName = name.toLowerCase().replace(/\s+/g, " ");
+  const match = await prisma.vendor.findFirst({
+    where: { storeId, normalizedName },
+  });
+  return { vendorId: match?.id ?? null, supplier: match?.name ?? name };
+}
+
 export const productRoutes = new Hono<AppEnv>();
 
 productRoutes.get("/", requireAuth, async (c) => {
-  const { storeId } = c.get("auth");
+  const auth = c.get("auth");
+  const { storeId } = auth;
+  const permissions = await loadUserPermissions(storeId, auth.sub);
+  const showCost =
+    userHasPermission(permissions, "products.price") ||
+    userHasPermission(permissions, "products.manage");
   const parsed = listProductsQuerySchema.safeParse({
     search: c.req.query("search"),
     name: c.req.query("name"),
@@ -137,7 +179,7 @@ productRoutes.get("/", requireAuth, async (c) => {
           }
         : {}),
     },
-    include: { category: true },
+    include: { category: true, vendor: { select: { id: true, name: true } } },
     orderBy: { createdAt: "desc" },
   });
 
@@ -147,7 +189,10 @@ productRoutes.get("/", requireAuth, async (c) => {
       )
     : products;
 
-  return c.json({ products: serialize(filtered) });
+  const productsOut = serialize(filtered).map((product) =>
+    withoutCost(product as Record<string, unknown>, showCost),
+  );
+  return c.json({ products: productsOut });
 });
 
 productRoutes.get("/barcode/:barcode", requireAuth, async (c) => {
@@ -156,7 +201,7 @@ productRoutes.get("/barcode/:barcode", requireAuth, async (c) => {
 
   const product = await prisma.product.findFirst({
     where: { storeId, barcode, isActive: true, isPriced: true },
-    include: { category: true },
+    include: { category: true, vendor: { select: { id: true, name: true } } },
   });
 
   if (!product) {
@@ -166,8 +211,55 @@ productRoutes.get("/barcode/:barcode", requireAuth, async (c) => {
   return c.json({ product: serialize(product) });
 });
 
-productRoutes.post("/", requireAuth, requireAnyPermission("products.manage"), async (c) => {
-  const { storeId } = c.get("auth");
+productRoutes.get(
+  "/pricing-requests",
+  requireAuth,
+  requireAnyPermission("products.price", "products.manage"),
+  async (c) => {
+    const { storeId } = c.get("auth");
+    const [requests, assignees] = await Promise.all([
+      listPricingRequests(storeId),
+      listPricingAssignees(storeId),
+    ]);
+    return c.json({
+      requests: serialize(requests),
+      assignees,
+    });
+  },
+);
+
+productRoutes.patch(
+  "/pricing-requests/:id",
+  requireAuth,
+  requireAnyPermission("products.price", "products.manage"),
+  async (c) => {
+    const { storeId } = c.get("auth");
+    const body = await c.req.json().catch(() => null);
+    const parsed = assignPricingRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "Invalid assignment", details: parsed.error.flatten() }, 400);
+    }
+
+    try {
+      const request = await assignPricingRequest(
+        storeId,
+        c.req.param("id"),
+        parsed.data.assignedToId,
+      );
+      return c.json({ request: serialize(request) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not assign request";
+      return c.json({ error: message }, 400);
+    }
+  },
+);
+
+productRoutes.post(
+  "/",
+  requireAuth,
+  requireAnyPermission("products.details", "products.manage"),
+  async (c) => {
+  const { storeId, sub } = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = createBasicProductSchema.safeParse(body);
 
@@ -194,16 +286,27 @@ productRoutes.post("/", requireAuth, requireAnyPermission("products.manage"), as
   }
 
   try {
+    const supplierLink = await resolveSupplierLink(
+      storeId,
+      parsed.data.vendorId,
+      parsed.data.supplier,
+    );
+    if ("error" in supplierLink) {
+      return c.json({ error: supplierLink.error }, 400);
+    }
+
     const product = await createBasicProduct(storeId, {
       sku: parsed.data.sku?.trim() || null,
       barcode: parsed.data.barcode?.trim() || null,
       name: parsed.data.name,
-      supplier: parsed.data.supplier,
+      supplier: supplierLink.supplier,
+      vendorId: supplierLink.vendorId,
       imageUrl: parsed.data.imageUrl,
       onStock: parsed.data.onStock,
       lowStockAt: parsed.data.lowStockAt,
       categoryId: parsed.data.categoryId ?? null,
       description: parsed.data.description ?? null,
+      requestedById: sub,
     });
     return c.json({ product: serialize(product) }, 201);
   } catch (error) {
@@ -212,8 +315,12 @@ productRoutes.post("/", requireAuth, requireAnyPermission("products.manage"), as
   }
 });
 
-productRoutes.patch("/:id/pricing", requireAuth, requireAnyPermission("products.manage"), async (c) => {
-  const { storeId } = c.get("auth");
+productRoutes.patch(
+  "/:id/pricing",
+  requireAuth,
+  requireAnyPermission("products.price", "products.manage"),
+  async (c) => {
+  const { storeId, sub } = c.get("auth");
   const body = await c.req.json().catch(() => null);
   const parsed = setPricingSchema.safeParse(body);
 
@@ -227,6 +334,7 @@ productRoutes.patch("/:id/pricing", requireAuth, requireAnyPermission("products.
       c.req.param("id"),
       parsed.data.price,
       parsed.data.cost,
+      sub,
     );
     return c.json({ product: serialize(product) });
   } catch (error) {
@@ -241,7 +349,7 @@ productRoutes.get("/:id", requireAuth, async (c) => {
 
   const product = await prisma.product.findFirst({
     where: { id, storeId, isActive: true },
-    include: { category: true },
+    include: { category: true, vendor: { select: { id: true, name: true } } },
   });
 
   if (!product) {
@@ -251,13 +359,39 @@ productRoutes.get("/:id", requireAuth, async (c) => {
   return c.json({ product: serialize(product) });
 });
 
-productRoutes.patch("/:id", requireAuth, requireAnyPermission("products.manage"), async (c) => {
-  const { storeId } = c.get("auth");
+productRoutes.patch(
+  "/:id",
+  requireAuth,
+  requireAnyPermission("products.details", "products.price", "products.manage"),
+  async (c) => {
+  const { storeId, sub } = c.get("auth");
+  const permissions = await loadUserPermissions(storeId, sub);
+  const canEditDetails =
+    userHasPermission(permissions, "products.details") ||
+    userHasPermission(permissions, "products.manage");
+  const canSetPrice =
+    userHasPermission(permissions, "products.price") ||
+    userHasPermission(permissions, "products.manage");
+  const canManage = userHasPermission(permissions, "products.manage");
   const body = await c.req.json().catch(() => null);
   const parsed = updateProductSchema.safeParse(body);
 
   if (!parsed.success) {
     return c.json({ error: "Invalid product payload", details: parsed.error.flatten() }, 400);
+  }
+
+  const touchesDetails = (
+    ["sku", "name", "description", "imageUrl", "supplier", "vendorId", "onStock", "lowStockAt", "categoryId"] as const
+  ).some((key) => parsed.data[key] !== undefined);
+  const touchesPrice = parsed.data.price !== undefined || parsed.data.cost !== undefined;
+  if (touchesDetails && !canEditDetails) {
+    return c.json({ error: "You do not have permission to edit item details" }, 403);
+  }
+  if (touchesPrice && !canSetPrice) {
+    return c.json({ error: "You do not have permission to set prices" }, 403);
+  }
+  if (parsed.data.isActive !== undefined && !canManage) {
+    return c.json({ error: "You do not have permission to publish or deactivate products" }, 403);
   }
 
   const existing = await prisma.product.findFirst({
@@ -300,6 +434,19 @@ productRoutes.patch("/:id", requireAuth, requireAnyPermission("products.manage")
       ? nextPrice > 0 && nextCost != null
       : existing.isPriced;
 
+  let linkedSupplier: { vendorId: string | null; supplier: string } | undefined;
+  if (parsed.data.vendorId !== undefined || parsed.data.supplier !== undefined) {
+    const supplierLink = await resolveSupplierLink(
+      storeId,
+      parsed.data.vendorId,
+      parsed.data.supplier,
+    );
+    if ("error" in supplierLink) {
+      return c.json({ error: supplierLink.error }, 400);
+    }
+    linkedSupplier = supplierLink;
+  }
+
   try {
     const product = await prisma.product.update({
       where: { id: existing.id },
@@ -310,9 +457,11 @@ productRoutes.patch("/:id", requireAuth, requireAnyPermission("products.manage")
           ? { description: parsed.data.description }
           : {}),
         ...(parsed.data.imageUrl !== undefined ? { imageUrl: parsed.data.imageUrl } : {}),
-        ...(parsed.data.supplier !== undefined
-          ? { supplier: parsed.data.supplier.trim() }
-          : {}),
+        ...(linkedSupplier
+          ? { supplier: linkedSupplier.supplier, vendorId: linkedSupplier.vendorId }
+          : parsed.data.supplier !== undefined
+            ? { supplier: parsed.data.supplier.trim() }
+            : {}),
         ...(parsed.data.price !== undefined ? { price: parsed.data.price } : {}),
         ...(parsed.data.cost !== undefined ? { cost: parsed.data.cost } : {}),
         ...(parsed.data.onStock !== undefined ? { onStock: parsed.data.onStock } : {}),
@@ -327,8 +476,18 @@ productRoutes.patch("/:id", requireAuth, requireAnyPermission("products.manage")
           ? { isPriced: pricingComplete }
           : {}),
       },
-      include: { category: true },
+      include: { category: true, vendor: { select: { id: true, name: true } } },
     });
+    if (pricingComplete && touchesPrice) {
+      await prisma.productPricingRequest.updateMany({
+        where: { storeId, productId: existing.id, status: "PENDING" },
+        data: {
+          status: "COMPLETED",
+          completedAt: new Date(),
+          completedById: sub,
+        },
+      });
+    }
     return c.json({ product: serialize(product) });
   } catch {
     return c.json({ error: "SKU already exists" }, 400);
@@ -349,7 +508,7 @@ productRoutes.delete("/:id", requireAuth, requireAnyPermission("products.manage"
   const product = await prisma.product.update({
     where: { id: existing.id },
     data: { isActive: false },
-    include: { category: true },
+    include: { category: true, vendor: { select: { id: true, name: true } } },
   });
 
   return c.json({ product: serialize(product) });

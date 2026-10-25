@@ -21,6 +21,220 @@ a {
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
 }
 
+.pos-page {
+  height: calc(100dvh - 60px - 2 * var(--mantine-spacing-lg));
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.pos-tabs {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.pos-tabs [role="tabpanel"]:not([hidden]) {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.pos-board {
+  display: flex;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+}
+
+.pos-sale-column {
+  flex: 1.45;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pos-ticket,
+.pos-catalog,
+.pos-pay,
+.pos-totals {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: #fff;
+  border: 1px solid var(--mantine-color-gray-3);
+  border-radius: var(--mantine-radius-md);
+}
+
+.pos-ticket,
+.pos-catalog {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pos-ticket {
+  flex: 1 1 auto;
+  min-height: 260px;
+}
+
+.pos-catalog {
+  flex: 0.8;
+}
+
+.pos-pay,
+.pos-totals {
+  flex: 0 0 auto;
+}
+
+.pos-ticket-toolbar {
+  border-bottom: 1px solid var(--mantine-color-gray-2);
+  background: #fff;
+}
+
+.pos-lines {
+  flex: 1 1 auto;
+  min-height: 180px;
+  overflow: auto;
+  background: #fff;
+}
+
+.pos-sale-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.pos-heading {
+  min-height: 0;
+}
+
+.pos-sale-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--mantine-color-gray-0);
+  font-weight: 600;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.pos-sale-table tbody td {
+  vertical-align: middle;
+}
+
+.pos-catalog-head {
+  padding: 12px 12px 0;
+  background: #fff;
+}
+
+.pos-category-scroll {
+  overflow-x: auto;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--mantine-color-gray-2);
+}
+
+.pos-category-scroll .mantine-SegmentedControl-root {
+  width: max-content;
+  min-width: 100%;
+}
+
+.pos-catalog-grid {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+}
+
+.pos-product-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 8px;
+  align-content: start;
+}
+
+.pos-photo-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0 0 6px;
+  border: 1px solid var(--mantine-color-gray-3);
+  border-radius: var(--mantine-radius-md);
+  background: #fff;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+  font: inherit;
+}
+
+.pos-photo-tile:hover:not(:disabled) {
+  border-color: var(--mantine-color-green-4);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+}
+
+.pos-photo-tile:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.pos-photo-tile img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  display: block;
+  background: var(--mantine-color-gray-1);
+}
+
+.pos-photo-tile span,
+.pos-photo-tile strong {
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.pos-photo-tile span {
+  font-weight: 600;
+}
+
+.pos-photo-tile strong {
+  font-weight: 700;
+  color: var(--mantine-color-green-7);
+}
+
+@media (max-width: 62em) {
+  .pos-page {
+    height: auto;
+    overflow: visible;
+  }
+
+  .pos-board {
+    flex-direction: column;
+    flex: none;
+  }
+
+  .pos-sale-column,
+  .pos-catalog {
+    flex: none;
+    min-height: 0;
+  }
+
+  .pos-ticket {
+    flex: none;
+    min-height: 320px;
+  }
+
+}
+
 .hover-row:hover {
   background: var(--mantine-color-gray-0);
   border-radius: 8px;

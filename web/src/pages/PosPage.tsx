@@ -1,31 +1,26 @@
 import {
   ActionIcon,
-  Badge,
   Box,
   Button,
-  Card,
-  Divider,
-  Grid,
   Group,
   Loader,
   Modal,
   NumberInput,
-  ScrollArea,
   SegmentedControl,
   Select,
   Stack,
   Switch,
+  Table,
   Tabs,
   Text,
   TextInput,
   Title,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { IconBarcode, IconMinus, IconPlus, IconTrash } from "@tabler/icons-react";
+import { IconBarcode, IconTrash } from "@tabler/icons-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { ProductCard } from "../components/ProductCard";
 import { PosProjectPanel } from "../components/PosProjectPanel";
 import { useAuth } from "../context/AuthContext";
 import { useHasPermission } from "../hooks/usePermissions";
@@ -41,7 +36,7 @@ import {
 } from "../lib/api";
 import { invalidateDashboardQueries } from "../lib/dashboardQueries";
 import { formatMoney, paymentLabel } from "../lib/format";
-import type { PaymentMethod } from "../lib/types";
+import type { PaymentMethod, Product } from "../lib/types";
 
 const PRIMARY_PAYMENTS: PaymentMethod[] = ["CASH", "CARD", "CHEQUE"];
 
@@ -68,7 +63,6 @@ export function PosPage() {
       : posTab;
   const {
     items,
-    itemCount,
     subtotal,
     addProduct,
     removeProduct,
@@ -101,15 +95,26 @@ export function PosPage() {
     queryFn: fetchCategories,
   });
 
-  const productsQuery = useQuery({
-    queryKey: ["products", search, categoryId],
-    queryFn: () =>
-      fetchProducts({
-        search: search || undefined,
-        categoryId: categoryId ?? undefined,
-        pricedOnly: true,
-      }),
+  const catalogQuery = useQuery({
+    queryKey: ["products", "pos-catalog"],
+    queryFn: () => fetchProducts({ pricedOnly: true }),
+    enabled: canSell,
   });
+
+  const catalog = catalogQuery.data?.products ?? [];
+
+  const visibleProducts = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return catalog.filter((product) => {
+      if (categoryId && product.categoryId !== categoryId) return false;
+      if (!query) return true;
+      return (
+        product.name.toLowerCase().includes(query) ||
+        (product.sku ?? "").toLowerCase().includes(query) ||
+        product.barcode.toLowerCase().includes(query)
+      );
+    });
+  }, [catalog, categoryId, search]);
 
   const customersQuery = useQuery({
     queryKey: ["customers", "loyalty"],
@@ -340,296 +345,302 @@ export function PosPage() {
     );
   }
 
-  if (productsQuery.isLoading && canSell) return <Loader color="green" />;
-
   return (
-    <Stack gap="md">
-      <div>
-        <Title order={2}>Point of Sale</Title>
-        <Text c="dimmed">Regular sales or custom projects with multi-vendor costs</Text>
-      </div>
+    <Stack gap="sm" className="pos-page">
+      <Group gap="xs" align="baseline" className="pos-heading">
+        <Title order={4}>Point of Sale</Title>
+        <Text c="dimmed" size="xs">
+          Regular sales or custom projects with multi-vendor costs
+        </Text>
+      </Group>
 
-      <Tabs value={activeTab} onChange={(v) => setPosTab(v ?? "sales")} color="green">
+      <Tabs
+        className="pos-tabs"
+        value={activeTab}
+        onChange={(v) => setPosTab(v ?? "sales")}
+        color="green"
+        keepMounted={false}
+      >
         <Tabs.List>
           {canSell ? <Tabs.Tab value="sales">Regular sales</Tabs.Tab> : null}
           {canOpenProjects ? <Tabs.Tab value="projects">Projects</Tabs.Tab> : null}
         </Tabs.List>
 
         {canSell ? (
-        <Tabs.Panel value="sales" pt="md">
-      <Grid gap="md">
-        <Grid.Col span={{ base: 12, lg: 8 }}>
-          <Stack gap="md">
-            <Group grow align="flex-end">
-              <TextInput
-                label="Search"
-                placeholder="Name, SKU, or barcode..."
-                value={search}
-                onChange={(e) => setSearch(e.currentTarget.value)}
-              />
-              <TextInput
-                label="Barcode scan"
-                placeholder="Scan or type barcode"
-                value={barcode}
-                onChange={(e) => setBarcode(e.currentTarget.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleBarcode()}
-                rightSection={
-                  <ActionIcon variant="light" color="green" onClick={handleBarcode}>
-                    <IconBarcode size={16} />
-                  </ActionIcon>
-                }
-              />
-            </Group>
-
-            <SegmentedControl
-              value={categoryId ?? ""}
-              onChange={(v) => setCategoryId(v || null)}
-              data={categoryOptions}
-            />
-
-            <SimpleProductGrid
-              products={productsQuery.data?.products ?? []}
-              currency={store!.currency}
-              onAdd={addProduct}
-            />
-          </Stack>
-        </Grid.Col>
-
-        <Grid.Col span={{ base: 12, lg: 4 }}>
-          <Card withBorder padding="md" radius="md" style={{ position: "sticky", top: 80 }}>
-            <Group justify="space-between" mb="sm">
-              <Title order={4}>Cart</Title>
-              <Badge color="green" variant="light">
-                {itemCount} items
-              </Badge>
-            </Group>
-
-            <ScrollArea.Autosize mah={360} offsetScrollbars>
-              <Stack gap="sm">
-                {items.map((item) => (
-                  <Box key={item.product.id}>
-                    <Group justify="space-between" align="flex-start" wrap="nowrap">
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <Text size="sm" fw={600} lineClamp={1}>
-                          {item.product.name}
-                        </Text>
-                        <Text size="xs" c="dimmed">
-                          Catalog: {formatMoney(item.product.price, store!.currency)}
-                        </Text>
-                      </div>
-                      <ActionIcon
-                        color="red"
-                        variant="subtle"
-                        onClick={() => removeProduct(item.product.id)}
-                      >
-                        <IconTrash size={16} />
-                      </ActionIcon>
-                    </Group>
-                    <Group justify="space-between" mt={6} align="flex-end">
-                      {canChangePrice ? (
-                        <NumberInput
-                          label="Unit price"
-                          size="xs"
-                          min={0}
-                          decimalScale={2}
-                          value={item.unitPrice}
-                          onChange={(v) =>
-                            setUnitPrice(item.product.id, Number(v) || 0)
-                          }
-                          w={110}
-                        />
-                      ) : (
-                        <Text size="xs" c="dimmed">
-                          {formatMoney(item.product.price, store!.currency)}
-                        </Text>
-                      )}
-                      <Group gap={6}>
-                        <ActionIcon
-                          size="sm"
-                          variant="light"
-                          onClick={() =>
-                            setQuantity(item.product.id, item.quantity - 1)
-                          }
-                        >
-                          <IconMinus size={14} />
-                        </ActionIcon>
-                        <NumberInput
-                          size="xs"
-                          w={70}
-                          min={1}
-                          max={item.product.onStock}
-                          value={item.quantity}
-                          onChange={(v) =>
-                            setQuantity(item.product.id, Number(v) || 1)
-                          }
-                          hideControls
-                        />
-                        <ActionIcon
-                          size="sm"
-                          variant="light"
-                          onClick={() =>
-                            setQuantity(item.product.id, item.quantity + 1)
-                          }
-                        >
-                          <IconPlus size={14} />
-                        </ActionIcon>
-                      </Group>
-                      <Text fw={600} size="sm">
-                        {formatMoney(item.unitPrice * item.quantity, store!.currency)}
-                      </Text>
-                    </Group>
-                  </Box>
-                ))}
-                {items.length === 0 ? (
-                  <Text c="dimmed" size="sm" ta="center" py="xl">
-                    Tap a product to add it to the cart
-                  </Text>
-                ) : null}
-              </Stack>
-            </ScrollArea.Autosize>
-
-            <Divider my="md" />
-
-            <Stack gap={6}>
-              <Group justify="space-between">
-                <Text size="sm" c="dimmed">
-                  Subtotal
-                </Text>
-                <Text size="sm">{formatMoney(subtotal, store!.currency)}</Text>
-              </Group>
-              {canDiscount ? (
-                <NumberInput
-                  label="Invoice discount (%)"
-                  min={0}
-                  max={100}
-                  decimalScale={1}
-                  suffix="%"
-                  value={invoiceDiscountPercent}
-                  onChange={(v) =>
-                    setInvoiceDiscountPercent(v === "" ? "" : Number(v) || 0)
+        <Tabs.Panel value="sales" pt="sm">
+          <div className="pos-board">
+            <div className="pos-sale-column">
+            <section className="pos-ticket">
+              <Group gap={8} wrap="nowrap" p="xs" align="flex-end" className="pos-ticket-toolbar">
+                <TextInput
+                  aria-label="Barcode scan"
+                  placeholder="Scan or type barcode"
+                  value={barcode}
+                  onChange={(e) => setBarcode(e.currentTarget.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleBarcode()}
+                  style={{ flex: 1.15 }}
+                  rightSectionWidth={36}
+                  rightSection={
+                    <ActionIcon
+                      variant="light"
+                      color="green"
+                      aria-label="Barcode scan"
+                      onClick={handleBarcode}
+                    >
+                      <IconBarcode size={16} />
+                    </ActionIcon>
                   }
                 />
-              ) : null}
-              {canDiscount && discountPercent > 0 ? (
+                <TextInput
+                  size="xs"
+                  label="Search"
+                  placeholder="Name, SKU, or barcode..."
+                  value={search}
+                  onChange={(e) => setSearch(e.currentTarget.value)}
+                  style={{ flex: 1 }}
+                />
+              </Group>
+
+              <div className="pos-lines">
+                <Table
+                  className="pos-sale-table"
+                  striped
+                  highlightOnHover
+                  horizontalSpacing="sm"
+                  verticalSpacing={4}
+                >
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Description</Table.Th>
+                      <Table.Th w={88}>Qty</Table.Th>
+                      <Table.Th w={120}>Price</Table.Th>
+                      <Table.Th w={110}>Total</Table.Th>
+                      <Table.Th w={52}>Del</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {items.map((item) => (
+                      <Table.Tr key={item.product.id}>
+                        <Table.Td>
+                          <Text size="sm" fw={600} lineClamp={1}>
+                            {item.product.name}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td>
+                          <NumberInput
+                            aria-label={`Quantity for ${item.product.name}`}
+                            size="xs"
+                            w={72}
+                            min={1}
+                            max={item.product.onStock}
+                            value={item.quantity}
+                            onChange={(v) => setQuantity(item.product.id, Number(v) || 1)}
+                            hideControls
+                          />
+                        </Table.Td>
+                        <Table.Td>
+                          {canChangePrice ? (
+                            <NumberInput
+                              aria-label={`Unit price for ${item.product.name}`}
+                              size="xs"
+                              w={100}
+                              min={0}
+                              decimalScale={2}
+                              value={item.unitPrice}
+                              onChange={(v) => setUnitPrice(item.product.id, Number(v) || 0)}
+                              hideControls
+                            />
+                          ) : (
+                            <Text size="sm">{formatMoney(item.product.price, store!.currency)}</Text>
+                          )}
+                        </Table.Td>
+                        <Table.Td>
+                          <Text fw={600} size="sm">
+                            {formatMoney(item.unitPrice * item.quantity, store!.currency)}
+                          </Text>
+                        </Table.Td>
+                        <Table.Td>
+                          <ActionIcon
+                            color="red"
+                            variant="subtle"
+                            aria-label={`Remove ${item.product.name}`}
+                            onClick={() => removeProduct(item.product.id)}
+                          >
+                            <IconTrash size={16} />
+                          </ActionIcon>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                    {items.length === 0 ? (
+                      <Table.Tr>
+                        <Table.Td colSpan={5}>
+                          <Text c="dimmed" size="sm" ta="center" py="xl">
+                            Tap a product to add it to the cart
+                          </Text>
+                        </Table.Td>
+                      </Table.Tr>
+                    ) : null}
+                  </Table.Tbody>
+                </Table>
+              </div>
+            </section>
+
+            <Stack gap={6} p="sm" className="pos-totals">
                 <Group justify="space-between">
                   <Text size="sm" c="dimmed">
-                    Discount ({discountPercent}%)
+                    Subtotal
                   </Text>
-                  <Text size="sm" c="red">
-                    -{formatMoney(invoiceDiscountAmount, store!.currency)}
+                  <Text size="sm">{formatMoney(subtotal, store!.currency)}</Text>
+                </Group>
+                {canDiscount ? (
+                  <NumberInput
+                    label="Invoice discount (%)"
+                    size="xs"
+                    min={0}
+                    max={100}
+                    decimalScale={1}
+                    suffix="%"
+                    value={invoiceDiscountPercent}
+                    onChange={(v) => setInvoiceDiscountPercent(v === "" ? "" : Number(v) || 0)}
+                  />
+                ) : null}
+                <Group justify="space-between">
+                  <Text fw={700}>Total</Text>
+                  <Text fw={700} c="green" size="lg">
+                    {formatMoney(total, store!.currency)}
                   </Text>
                 </Group>
-              ) : null}
-              <Group justify="space-between">
-                <Text fw={700}>Total</Text>
-                <Text fw={700} c="green" size="lg">
-                  {formatMoney(total, store!.currency)}
-                </Text>
-              </Group>
             </Stack>
 
-            <Divider my="md" />
+            <Stack gap="xs" p="sm" className="pos-pay">
+                  {canLoyalty ? (
+                    <Group justify="space-between">
+                      <div>
+                        <Text size="xs" fw={600}>
+                          Loyalty program
+                        </Text>
+                        <Text size="xs" c="dimmed">
+                          Add customer info to earn points
+                        </Text>
+                      </div>
+                      <Switch
+                        checked={loyaltyActive}
+                        onChange={(e) => setLoyaltyActive(e.currentTarget.checked)}
+                        color="green"
+                        size="sm"
+                      />
+                    </Group>
+                  ) : null}
 
-            {canLoyalty ? (
-            <Group justify="space-between" mb="xs">
-              <div>
-                <Text size="sm" fw={600}>
-                  Loyalty program
-                </Text>
-                <Text size="xs" c="dimmed">
-                  Add customer info to earn points
-                </Text>
+                  {canLoyalty && loyaltyActive ? (
+                    <Stack gap="xs">
+                      <Select
+                        label="Existing loyalty member"
+                        placeholder="New customer"
+                        clearable
+                        searchable
+                        size="xs"
+                        data={(customersQuery.data?.customers ?? []).map((c) => ({
+                          value: c.id,
+                          label: `${c.name} · ${c.loyaltyPoints} pts`,
+                        }))}
+                        value={customerId}
+                        onChange={(v) => selectLoyaltyCustomer(v)}
+                      />
+                      <TextInput
+                        label="Name"
+                        required
+                        size="xs"
+                        value={customerName}
+                        onChange={(e) => setCustomerName(e.currentTarget.value)}
+                      />
+                      <TextInput
+                        label="Phone"
+                        required
+                        size="xs"
+                        value={customerPhone}
+                        onChange={(e) => setCustomerPhone(e.currentTarget.value)}
+                      />
+                      <TextInput
+                        label="Email"
+                        size="xs"
+                        value={customerEmail}
+                        onChange={(e) => setCustomerEmail(e.currentTarget.value)}
+                      />
+                    </Stack>
+                  ) : null}
+
+                  <Text size="xs" fw={600}>
+                    Payment method
+                  </Text>
+                  <SegmentedControl
+                    fullWidth
+                    size="xs"
+                    value={showOtherPayments ? "OTHER" : paymentMethod}
+                    onChange={handlePaymentSegmentChange}
+                    data={[
+                      ...PRIMARY_PAYMENTS.map((m) => ({
+                        label: paymentLabel(m),
+                        value: m,
+                      })),
+                      ...(canOtherPayments ? [{ label: "Other", value: "OTHER" }] : []),
+                    ]}
+                  />
+                  {canOtherPayments && showOtherPayments ? (
+                    <Select
+                      label="Other payment type"
+                      size="xs"
+                      data={OTHER_PAYMENTS.map((m) => ({
+                        value: m,
+                        label: paymentLabel(m),
+                      }))}
+                      value={otherPayment}
+                      onChange={handleOtherPaymentChange}
+                    />
+                  ) : null}
+                  {canOtherPayments &&
+                  showOtherPayments &&
+                  otherPayment === "DEBIT" &&
+                  debitCustomerConfirmed ? (
+                    <Text size="xs" c="dimmed">
+                      Debit customer: {debitCustomerName} · {debitCustomerPhone}
+                    </Text>
+                  ) : null}
+                  <Button
+                    color="green"
+                    fullWidth
+                    size="sm"
+                    disabled={items.length === 0}
+                    loading={checkoutLoading}
+                    onClick={completeSale}
+                  >
+                    Complete sale
+                  </Button>
+            </Stack>
+            </div>
+
+            <section className="pos-catalog">
+              <Box className="pos-category-scroll" px="sm" pt="sm">
+                  <SegmentedControl
+                    value={categoryId ?? ""}
+                    onChange={(v) => setCategoryId(v || null)}
+                    data={categoryOptions}
+                  />
+                </Box>
+
+              <div className="pos-catalog-grid">
+                {catalogQuery.isLoading ? (
+                  <Loader color="green" />
+                ) : (
+                  <SimpleProductGrid
+                    products={visibleProducts}
+                    currency={store!.currency}
+                    onAdd={addProduct}
+                  />
+                )}
               </div>
-              <Switch
-                checked={loyaltyActive}
-                onChange={(e) => setLoyaltyActive(e.currentTarget.checked)}
-                color="green"
-              />
-            </Group>
-            ) : null}
-
-            {canLoyalty && loyaltyActive ? (
-              <Stack gap="sm" mb="md">
-                <Select
-                  label="Existing loyalty member"
-                  placeholder="New customer"
-                  clearable
-                  searchable
-                  data={(customersQuery.data?.customers ?? []).map((c) => ({
-                    value: c.id,
-                    label: `${c.name} · ${c.loyaltyPoints} pts`,
-                  }))}
-                  value={customerId}
-                  onChange={(v) => selectLoyaltyCustomer(v)}
-                />
-                <TextInput
-                  label="Name"
-                  required
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.currentTarget.value)}
-                />
-                <TextInput
-                  label="Phone"
-                  required
-                  value={customerPhone}
-                  onChange={(e) => setCustomerPhone(e.currentTarget.value)}
-                />
-                <TextInput
-                  label="Email"
-                  value={customerEmail}
-                  onChange={(e) => setCustomerEmail(e.currentTarget.value)}
-                />
-              </Stack>
-            ) : null}
-
-            <Text size="sm" fw={600} mb={6}>
-              Payment method
-            </Text>
-            <SegmentedControl
-              fullWidth
-              value={showOtherPayments ? "OTHER" : paymentMethod}
-              onChange={handlePaymentSegmentChange}
-              data={[
-                ...PRIMARY_PAYMENTS.map((m) => ({
-                  label: paymentLabel(m),
-                  value: m,
-                })),
-                ...(canOtherPayments ? [{ label: "Other", value: "OTHER" }] : []),
-              ]}
-              mb="sm"
-            />
-            {canOtherPayments && showOtherPayments ? (
-              <Select
-                label="Other payment type"
-                data={OTHER_PAYMENTS.map((m) => ({
-                  value: m,
-                  label: paymentLabel(m),
-                }))}
-                value={otherPayment}
-                onChange={handleOtherPaymentChange}
-                mb="md"
-              />
-            ) : null}
-
-            {canOtherPayments && showOtherPayments && otherPayment === "DEBIT" && debitCustomerConfirmed ? (
-              <Text size="sm" c="dimmed" mb="md">
-                Debit customer: {debitCustomerName} · {debitCustomerPhone}
-              </Text>
-            ) : null}
-
-            <Button
-              color="green"
-              fullWidth
-              size="md"
-              disabled={items.length === 0}
-              loading={checkoutLoading}
-              onClick={completeSale}
-            >
-              Complete sale
-            </Button>
-          </Card>
-        </Grid.Col>
-      </Grid>
+            </section>
+          </div>
         </Tabs.Panel>
         ) : null}
 
@@ -685,32 +696,33 @@ function SimpleProductGrid({
   currency,
   onAdd,
 }: {
-  products: Parameters<typeof ProductCard>[0]["product"][];
-  currency: Parameters<typeof ProductCard>[0]["currency"];
-  onAdd: (product: Parameters<typeof ProductCard>[0]["product"]) => void;
+  products: Product[];
+  currency: string;
+  onAdd: (product: Product) => void;
 }) {
   return (
-    <Box
-      style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
-        gap: 16,
-      }}
-    >
+    <div className="pos-product-grid">
       {products.map((product) => (
-        <ProductCard
+        <button
           key={product.id}
-          product={product}
-          currency={currency}
+          type="button"
+          className="pos-photo-tile"
+          disabled={product.onStock < 1}
           onClick={() => onAdd(product)}
-          compact
-        />
+        >
+          <img
+            src={product.imageUrl || "https://placehold.co/160x160/e2e8f0/64748b?text=No+Image"}
+            alt={product.name}
+          />
+          <span>{product.name}</span>
+          <strong>{formatMoney(product.price, currency)}</strong>
+        </button>
       ))}
       {products.length === 0 ? (
         <Text c="dimmed" py="xl">
           No products found
         </Text>
       ) : null}
-    </Box>
+    </div>
   );
 }

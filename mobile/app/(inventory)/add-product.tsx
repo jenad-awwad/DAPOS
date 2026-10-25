@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { useAuth } from "../../context/AuthContext";
+import { userCanAccess } from "../../lib/permissions";
 import {
   createProduct,
   fetchCategories,
@@ -40,6 +41,7 @@ export default function AddProductScreen() {
   const [cost, setCost] = useState("");
 
   const canManage = user?.role === "ADMIN" || user?.role === "MANAGER";
+  const canSetPrice = userCanAccess(user, ["products.price", "products.manage"]) || canManage;
 
   useEffect(() => {
     fetchCategories()
@@ -105,6 +107,14 @@ export default function AddProductScreen() {
         categoryId,
       });
       setCreatedProduct(product);
+      if (!canSetPrice) {
+        Alert.alert(
+          "Pending pricing",
+          `${product.name} was submitted. Someone with pricing permission must set the price before it can be sold.`,
+          [{ text: "OK", onPress: () => router.back() }],
+        );
+        return;
+      }
       setStep(2);
       Alert.alert("Saved", `Barcode: ${product.barcode}`);
     } catch (err) {

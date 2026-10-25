@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { resolveUserPermissions } from "../lib/permissions.js";
 import { prisma } from "../lib/prisma.js";
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
@@ -38,7 +39,24 @@ export type CreateBasicProductInput = {
   lowStockAt?: number | null;
   categoryId?: string | null;
   description?: string | null;
+  vendorId?: string | null;
+  requestedById: string;
 };
+
+async function openPricingRequest(
+  client: DbClient,
+  input: { storeId: string; productId: string; requestedById: string },
+) {
+  await client.productPricingRequest.create({
+    data: {
+      storeId: input.storeId,
+      productId: input.productId,
+      requestedById: input.requestedById,
+      status: "PENDING",
+      submittedAt: new Date(),
+    },
+  });
+}
 
 export async function createBasicProduct(storeId: string, input: CreateBasicProductInput) {
   const trimmedBarcode = input.barcode?.trim();
@@ -51,7 +69,7 @@ export async function createBasicProduct(storeId: string, input: CreateBasicProd
       throw new Error("Barcode already exists");
     }
 
-    return prisma.product.create({
+    const created = await prisma.product.create({
       data: {
         storeId,
         sku: input.sku?.trim() || null,
@@ -63,18 +81,25 @@ export async function createBasicProduct(storeId: string, input: CreateBasicProd
         lowStockAt: input.lowStockAt ?? null,
         categoryId: input.categoryId ?? null,
         description: input.description ?? null,
+        vendorId: input.vendorId ?? null,
         isPriced: false,
         price: 0,
       },
-      include: { category: true },
+      include: { category: true, vendor: { select: { id: true, name: true } } },
     });
+    await openPricingRequest(prisma, {
+      storeId,
+      productId: created.id,
+      requestedById: input.requestedById,
+    });
+    return created;
   }
 
   return prisma.$transaction(async (tx) => {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       const barcode = await generateProductBarcode(storeId, tx);
       try {
-        return await tx.product.create({
+        const created = await tx.product.create({
           data: {
             storeId,
             sku: input.sku?.trim() || null,
@@ -86,11 +111,18 @@ export async function createBasicProduct(storeId: string, input: CreateBasicProd
             lowStockAt: input.lowStockAt ?? null,
             categoryId: input.categoryId ?? null,
             description: input.description ?? null,
+            vendorId: input.vendorId ?? null,
             isPriced: false,
             price: 0,
           },
-          include: { category: true },
+          include: { category: true, vendor: { select: { id: true, name: true } } },
         });
+        await openPricingRequest(tx, {
+          storeId,
+          productId: created.id,
+          requestedById: input.requestedById,
+        });
+        return created;
       } catch (error) {
         const message = error instanceof Error ? error.message : "";
         if (!message.includes("Unique constraint")) {
@@ -107,6 +139,7 @@ export async function setProductPricing(
   productId: string,
   price: number,
   cost: number,
+  completedById: string,
 ) {
   const existing = await prisma.product.findFirst({
     where: { id: productId, storeId },
@@ -115,13 +148,95 @@ export async function setProductPricing(
     throw new Error("Product not found");
   }
 
-  return prisma.product.update({
-    where: { id: existing.id },
-    data: {
-      price,
-      cost,
-      isPriced: true,
+  const completedAt = new Date();
+  const [product] = await prisma.$transaction([
+    prisma.product.update({
+      where: { id: existing.id },
+      data: {
+        price,
+        cost,
+        isPriced: true,
+      },
+      include: { category: true, vendor: { select: { id: true, name: true } } },
+    }),
+    prisma.productPricingRequest.updateMany({
+      where: { storeId, productId: existing.id, status: "PENDING" },
+      data: {
+        status: "COMPLETED",
+        completedAt,
+        completedById,
+      },
+    }),
+  ]);
+
+  return product;
+}
+
+const pricingRequestInclude = {
+  product: { include: { category: true, vendor: { select: { id: true, name: true } } } },
+  requestedBy: { select: { id: true, name: true } },
+  assignedTo: { select: { id: true, name: true } },
+  completedBy: { select: { id: true, name: true } },
+} as const;
+
+export async function listPricingRequests(storeId: string) {
+  return prisma.productPricingRequest.findMany({
+    where: { storeId },
+    include: pricingRequestInclude,
+    orderBy: [{ status: "desc" }, { submittedAt: "desc" }],
+  });
+}
+
+export async function listPricingAssignees(storeId: string) {
+  const users = await prisma.user.findMany({
+    where: { storeId, isActive: true },
+    include: {
+      storeRole: true,
+      store: { select: { rolePolicies: true } },
     },
-    include: { category: true },
+    orderBy: { name: "asc" },
+  });
+
+  return users
+    .filter((user) => {
+      const permissions = resolveUserPermissions(
+        user.role,
+        user.customPolicies,
+        user.store.rolePolicies,
+        user.storeRole?.permissions,
+      );
+      return (
+        permissions.includes("products.price") ||
+        permissions.includes("products.manage")
+      );
+    })
+    .map((user) => ({ id: user.id, name: user.name }));
+}
+
+export async function assignPricingRequest(
+  storeId: string,
+  requestId: string,
+  assignedToId: string | null,
+) {
+  const existing = await prisma.productPricingRequest.findFirst({
+    where: { id: requestId, storeId, status: "PENDING" },
+  });
+  if (!existing) {
+    throw new Error("Open pricing request not found");
+  }
+
+  if (assignedToId) {
+    const assignee = await prisma.user.findFirst({
+      where: { id: assignedToId, storeId, isActive: true },
+    });
+    if (!assignee) {
+      throw new Error("Assigned user not found");
+    }
+  }
+
+  return prisma.productPricingRequest.update({
+    where: { id: existing.id },
+    data: { assignedToId },
+    include: pricingRequestInclude,
   });
 }

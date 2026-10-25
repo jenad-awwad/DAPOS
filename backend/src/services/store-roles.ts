@@ -100,7 +100,7 @@ export async function ensureStoreRoles(storeId: string): Promise<StoreRoleRecord
   for (const role of roles) {
     if (!role.systemCode) continue;
     const stored = readStoredPermissions(role.permissions);
-    if (stored?.configured) continue;
+    if (stored?.configured || stored?.revision) continue;
     const current = stored?.keys ?? DEFAULT_ROLE_POLICIES[role.systemCode];
     const next = withVendorPermissionDefaults(role.systemCode, current);
     if (next.length === current.length && next.every((key) => current.includes(key))) {

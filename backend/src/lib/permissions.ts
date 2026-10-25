@@ -1,7 +1,8 @@
 import type { UserRole } from "@prisma/client";
 
 /** Stored beside permission keys once an administrator saves a role on the new catalog. */
-export const PERMISSION_REVISION = "_v2";
+export const PERMISSION_REVISION = "_v3";
+const PREVIOUS_PERMISSION_REVISION = "_v2";
 
 export const PERMISSION_KEYS = [
   "dashboard.view",
@@ -19,6 +20,8 @@ export const PERMISSION_KEYS = [
   "inventory.view",
   "inventory.manage",
   "products.view",
+  "products.details",
+  "products.price",
   "products.manage",
   "categories.view",
   "categories.manage",
@@ -65,6 +68,8 @@ export const PERMISSION_CATALOG: PermissionDefinition[] = [
   { key: "inventory.view", label: "View inventory", group: "Inventory" },
   { key: "inventory.manage", label: "Manage inventory", group: "Inventory", detail: true },
   { key: "products.view", label: "View products", group: "Inventory" },
+  { key: "products.details", label: "Create item details", group: "Inventory", detail: true },
+  { key: "products.price", label: "Set product prices", group: "Inventory", detail: true },
   { key: "products.manage", label: "Manage products", group: "Inventory", detail: true },
   { key: "categories.view", label: "View categories", group: "Inventory" },
   { key: "categories.manage", label: "Manage categories", group: "Inventory", detail: true },
@@ -117,6 +122,8 @@ const PERMISSION_REQUIRES: Partial<Record<PermissionKey, PermissionKey>> = {
   "orders.items": "orders.view",
   "orders.void": "orders.view",
   "inventory.manage": "inventory.view",
+  "products.details": "products.view",
+  "products.price": "products.view",
   "products.manage": "products.view",
   "categories.manage": "categories.view",
   "stock.adjust": "stock.view",
@@ -143,12 +150,19 @@ export function isPermissionKey(value: string): value is PermissionKey {
 export function readStoredPermissions(value: unknown): {
   keys: PermissionKey[];
   configured: boolean;
+  revision?: string;
 } | null {
   if (value == null || !Array.isArray(value)) return null;
   const strings = value.filter((item): item is string => typeof item === "string");
+  const revision = strings.includes(PERMISSION_REVISION)
+    ? PERMISSION_REVISION
+    : strings.includes(PREVIOUS_PERMISSION_REVISION)
+      ? PREVIOUS_PERMISSION_REVISION
+      : undefined;
   return {
-    configured: strings.includes(PERMISSION_REVISION),
+    configured: revision === PERMISSION_REVISION,
     keys: strings.filter(isPermissionKey),
+    revision,
   };
 }
 
@@ -169,7 +183,11 @@ function expandLegacy(role: UserRole | null, keys: PermissionKey[]): PermissionK
   }
   if (next.has("orders.view")) next.add("orders.items");
   if (next.has("calendar.manage")) next.add("calendar.view");
-  if (next.has("products.manage")) next.add("products.view");
+  if (next.has("products.manage")) {
+    next.add("products.view");
+    next.add("products.details");
+    next.add("products.price");
+  }
   if (next.has("categories.manage")) next.add("categories.view");
   if (next.has("customers.manage")) next.add("customers.view");
   if (next.has("inventory.manage")) next.add("inventory.view");
@@ -199,6 +217,15 @@ export function parsePermissionList(
   const stored = readStoredPermissions(value);
   if (!stored) return null;
   if (stored.configured) return implyDependencies(stored.keys);
+  if (stored.revision === PREVIOUS_PERMISSION_REVISION) {
+    const next = new Set(stored.keys);
+    if (next.has("products.manage")) {
+      next.add("products.details");
+      next.add("products.price");
+      next.add("products.view");
+    }
+    return implyDependencies([...next]);
+  }
   return expandLegacy(role ?? null, stored.keys);
 }
 

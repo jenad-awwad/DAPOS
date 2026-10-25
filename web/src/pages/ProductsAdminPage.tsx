@@ -13,6 +13,7 @@ import {
   Stepper,
   Table,
   Text,
+  Textarea,
   TextInput,
   Title,
 } from "@mantine/core";
@@ -31,20 +32,25 @@ import { ProductImagePicker } from "../components/ProductImagePicker";
 import { useAuth } from "../context/AuthContext";
 import { useHasPermission } from "../hooks/usePermissions";
 import {
+  assignPricingRequest,
   createProduct,
+  createVendor,
   deleteProduct,
-  fetchAllCategories,
+  fetchCategories,
+  fetchPricingRequests,
   fetchProducts,
+  fetchVendorOptions,
   setProductPricing,
   updateProduct,
 } from "../lib/api";
-import { formatMoney, toMoney } from "../lib/format";
+import { formatDate, formatMoney, toMoney } from "../lib/format";
 import type { Product } from "../lib/types";
 
 type BasicFormValues = {
   sku: string;
   name: string;
-  supplier: string;
+  description: string;
+  vendorId: string;
   imageUrl: string;
   onStock: number;
   categoryId: string;
@@ -61,14 +67,15 @@ type EditFormValues = BasicFormValues & PricingFormValues & { lowStockAt: number
 const PRODUCT_STATUSES = [
   { value: "ACTIVE", label: "Active" },
   { value: "INACTIVE", label: "Inactive" },
-  { value: "NEEDS_PRICING", label: "Needs pricing" },
-  { value: "PRICED", label: "Ready for sale" },
+  { value: "NEEDS_PRICING", label: "Pending pricing" },
+  { value: "PRICED", label: "Published" },
 ] as const;
 
 const emptyBasicForm: BasicFormValues = {
   sku: "",
   name: "",
-  supplier: "",
+  description: "",
+  vendorId: "",
   imageUrl: "",
   onStock: 0,
   categoryId: "",
@@ -88,8 +95,16 @@ function toIsoDateTime(localValue: string): string | undefined {
 }
 
 export function ProductsAdminPage() {
-  const canEditProducts = useHasPermission("products.manage");
-  const canViewProducts = useHasPermission(["products.view", "products.manage"]);
+  const canEditDetails = useHasPermission(["products.details", "products.manage"]);
+  const canSetPrice = useHasPermission(["products.price", "products.manage"]);
+  const canManageProducts = useHasPermission("products.manage");
+  const canAddVendor = useHasPermission("vendors.manage");
+  const canViewProducts = useHasPermission([
+    "products.view",
+    "products.details",
+    "products.price",
+    "products.manage",
+  ]);
   const { store } = useAuth();
   const queryClient = useQueryClient();
   const [opened, { open, close }] = useDisclosure(false);
@@ -99,6 +114,9 @@ export function ProductsAdminPage() {
   const [createdProduct, setCreatedProduct] = useState<Product | null>(null);
   const [pricingProduct, setPricingProduct] = useState<Product | null>(null);
   const [editing, setEditing] = useState<Product | null>(null);
+  const [vendorModalOpen, setVendorModalOpen] = useState(false);
+  const [newVendorName, setNewVendorName] = useState("");
+  const [vendorTarget, setVendorTarget] = useState<"create" | "edit">("create");
 
   const [nameSearch, setNameSearch] = useState("");
   const [barcodeSearch, setBarcodeSearch] = useState("");
@@ -127,15 +145,36 @@ export function ProductsAdminPage() {
   });
 
   const categoriesQuery = useQuery({
-    queryKey: ["categories", "all"],
-    queryFn: fetchAllCategories,
+    queryKey: ["categories"],
+    queryFn: fetchCategories,
   });
+
+  const vendorsQuery = useQuery({
+    queryKey: ["vendors", "options"],
+    queryFn: fetchVendorOptions,
+    enabled: canEditDetails,
+  });
+
+  const pricingRequestsQuery = useQuery({
+    queryKey: ["pricing-requests"],
+    queryFn: fetchPricingRequests,
+    enabled: canSetPrice,
+  });
+
+  const vendorSelectData = useMemo(
+    () =>
+      (vendorsQuery.data?.vendors ?? []).map((vendor) => ({
+        value: vendor.id,
+        label: vendor.name,
+      })),
+    [vendorsQuery.data],
+  );
 
   const basicForm = useForm<BasicFormValues>({
     initialValues: emptyBasicForm,
     validate: {
       name: (v) => (!v.trim() ? "Name is required" : null),
-      supplier: (v) => (!v.trim() ? "Supplier is required" : null),
+      vendorId: (v) => (!v ? "Supplier is required" : null),
       imageUrl: (v) => (!v ? "Product photo is required" : null),
     },
   });
@@ -154,6 +193,22 @@ export function ProductsAdminPage() {
       ...emptyPricingForm,
       lowStockAt: "",
     },
+    validate: {
+      vendorId: (value) => (!value ? "Supplier is required" : null),
+    },
+  });
+
+  const createVendorMutation = useMutation({
+    mutationFn: () => createVendor({ name: newVendorName.trim() }),
+    onSuccess: ({ vendor }) => {
+      queryClient.invalidateQueries({ queryKey: ["vendors", "options"] });
+      if (vendorTarget === "edit") editForm.setFieldValue("vendorId", vendor.id);
+      else basicForm.setFieldValue("vendorId", vendor.id);
+      setNewVendorName("");
+      setVendorModalOpen(false);
+      notifications.show({ color: "green", message: "Vendor added" });
+    },
+    onError: (err: Error) => notifications.show({ color: "red", message: err.message }),
   });
 
   const invalidateProducts = () => {
@@ -164,12 +219,22 @@ export function ProductsAdminPage() {
     mutationFn: createProduct,
     onSuccess: ({ product }) => {
       invalidateProducts();
-      setCreatedProduct(product);
-      setStep(1);
+      queryClient.invalidateQueries({ queryKey: ["pricing-requests"] });
+      if (canSetPrice) {
+        setCreatedProduct(product);
+        setStep(1);
+        notifications.show({
+          color: "green",
+          message: `Item saved · Barcode ${product.barcode}. Set the price to publish it.`,
+        });
+        return;
+      }
       notifications.show({
         color: "green",
-        message: `Product created · Barcode ${product.barcode}`,
+        message: `${product.name} is pending pricing. A pricing request was sent.`,
       });
+      close();
+      resetCreateFlow();
     },
     onError: (err: Error) => {
       notifications.show({ color: "red", message: err.message });
@@ -181,7 +246,8 @@ export function ProductsAdminPage() {
       setProductPricing(id, values),
     onSuccess: () => {
       invalidateProducts();
-      notifications.show({ color: "green", message: "Pricing saved" });
+      queryClient.invalidateQueries({ queryKey: ["pricing-requests"] });
+      notifications.show({ color: "green", message: "Price saved. Product is published." });
       close();
       closePricing();
       resetCreateFlow();
@@ -195,15 +261,19 @@ export function ProductsAdminPage() {
   const updateMutation = useMutation({
     mutationFn: ({ id, values }: { id: string; values: EditFormValues }) =>
       updateProduct(id, {
-        sku: values.sku || null,
-        name: values.name,
-        supplier: values.supplier,
-        imageUrl: values.imageUrl,
-        onStock: values.onStock,
-        lowStockAt: values.lowStockAt === "" ? null : values.lowStockAt,
-        categoryId: values.categoryId || null,
-        price: values.price,
-        cost: values.cost,
+        ...(canEditDetails
+          ? {
+              sku: values.sku || null,
+              name: values.name,
+              description: values.description || null,
+              vendorId: values.vendorId,
+              imageUrl: values.imageUrl,
+              onStock: values.onStock,
+              lowStockAt: values.lowStockAt === "" ? null : values.lowStockAt,
+              categoryId: values.categoryId || null,
+            }
+          : {}),
+        ...(canSetPrice ? { price: values.price, cost: values.cost } : {}),
       }),
     onSuccess: () => {
       invalidateProducts();
@@ -215,6 +285,16 @@ export function ProductsAdminPage() {
     onError: (err: Error) => {
       notifications.show({ color: "red", message: err.message });
     },
+  });
+
+  const assignMutation = useMutation({
+    mutationFn: ({ id, assignedToId }: { id: string; assignedToId: string | null }) =>
+      assignPricingRequest(id, assignedToId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["pricing-requests"] });
+      notifications.show({ color: "green", message: "Pricing request assigned" });
+    },
+    onError: (err: Error) => notifications.show({ color: "red", message: err.message }),
   });
 
   const deleteMutation = useMutation({
@@ -252,9 +332,10 @@ export function ProductsAdminPage() {
   if (!canViewProducts) return <Navigate to="/" replace />;
   if (productsQuery.isLoading) return <Loader color="green" />;
 
-  const categoryOptions = (categoriesQuery.data?.categories ?? [])
-    .filter((c) => c.isActive !== false)
-    .map((c) => ({ value: c.id, label: c.name }));
+  const categoryOptions = (categoriesQuery.data?.categories ?? []).map((c) => ({
+    value: c.id,
+    label: c.name,
+  }));
 
   const products = productsQuery.data?.products ?? [];
 
@@ -269,7 +350,8 @@ export function ProductsAdminPage() {
     editForm.setValues({
       sku: product.sku ?? "",
       name: product.name,
-      supplier: product.supplier,
+      description: product.description ?? "",
+      vendorId: product.vendorId ?? product.vendor?.id ?? "",
       imageUrl: product.imageUrl,
       onStock: product.onStock,
       categoryId: product.categoryId ?? "",
@@ -301,12 +383,12 @@ export function ProductsAdminPage() {
     <Stack gap="lg">
       <Group justify="space-between">
         <div>
-          <Title order={2}>Manage Products</Title>
+          <Title order={2}>Products</Title>
           <Text c="dimmed">
-            Phase 1: item details and photo. Phase 2: price and cost.
+            Item details and pricing are separate. A new item stays pending until someone with pricing permission publishes a price.
           </Text>
         </div>
-        {canEditProducts ? (
+        {canEditDetails ? (
           <Button color="green" leftSection={<IconPlus size={16} />} onClick={openCreate}>
             Add product
           </Button>
@@ -383,6 +465,94 @@ export function ProductsAdminPage() {
         </Stack>
       </Card>
 
+      {canSetPrice ? (
+        <Card withBorder padding="md" radius="md">
+          <Title order={4} mb="sm">
+            Pricing requests
+          </Title>
+          <Table striped>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Product</Table.Th>
+                <Table.Th>Status</Table.Th>
+                <Table.Th>Submitted</Table.Th>
+                <Table.Th>Assigned</Table.Th>
+                <Table.Th>Completed</Table.Th>
+                <Table.Th ta="right">Action</Table.Th>
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {(pricingRequestsQuery.data?.requests ?? []).map((request) => (
+                <Table.Tr key={request.id}>
+                  <Table.Td>
+                    <Text size="sm" fw={600}>
+                      {request.product.name}
+                    </Text>
+                    <Text size="xs" c="dimmed">
+                      {request.product.barcode} · requested by {request.requestedBy.name}
+                    </Text>
+                  </Table.Td>
+                  <Table.Td>
+                    <Badge color={request.status === "PENDING" ? "orange" : "green"} variant="light">
+                      {request.status === "PENDING" ? "Pending pricing" : "Published"}
+                    </Badge>
+                  </Table.Td>
+                  <Table.Td>{formatDate(request.submittedAt)}</Table.Td>
+                  <Table.Td>
+                    {request.status === "PENDING" ? (
+                      <Select
+                        size="xs"
+                        placeholder="Unassigned"
+                        clearable
+                        data={(pricingRequestsQuery.data?.assignees ?? []).map((user) => ({
+                          value: user.id,
+                          label: user.name,
+                        }))}
+                        value={request.assignedTo?.id ?? null}
+                        onChange={(value) =>
+                          assignMutation.mutate({
+                            id: request.id,
+                            assignedToId: value,
+                          })
+                        }
+                      />
+                    ) : (
+                      request.assignedTo?.name ?? request.completedBy?.name ?? "—"
+                    )}
+                  </Table.Td>
+                  <Table.Td>
+                    {request.completedAt
+                      ? `${formatDate(request.completedAt)}${request.completedBy ? ` · ${request.completedBy.name}` : ""}`
+                      : "—"}
+                  </Table.Td>
+                  <Table.Td ta="right">
+                    {request.status === "PENDING" ? (
+                      <Button
+                        size="xs"
+                        color="green"
+                        variant="light"
+                        onClick={() => openPricingOnly(request.product)}
+                      >
+                        Set price
+                      </Button>
+                    ) : (
+                      <Text size="xs" c="dimmed">
+                        Done
+                      </Text>
+                    )}
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+          {(pricingRequestsQuery.data?.requests.length ?? 0) === 0 ? (
+            <Text c="dimmed" size="sm" mt="sm">
+              No pricing requests yet.
+            </Text>
+          ) : null}
+        </Card>
+      ) : null}
+
       <Table striped highlightOnHover>
         <Table.Thead>
           <Table.Tr>
@@ -402,7 +572,7 @@ export function ProductsAdminPage() {
               <Table.Td>{product.name}</Table.Td>
               <Table.Td>{product.barcode}</Table.Td>
               <Table.Td>{product.sku ?? "—"}</Table.Td>
-              <Table.Td>{product.supplier}</Table.Td>
+              <Table.Td>{product.vendor?.name ?? product.supplier}</Table.Td>
               <Table.Td>
                 {product.isPriced
                   ? formatMoney(toMoney(product.price), store!.currency)
@@ -410,34 +580,38 @@ export function ProductsAdminPage() {
               </Table.Td>
               <Table.Td>{product.onStock}</Table.Td>
               <Table.Td>
-                <Group gap={6}>
-                  <Badge color={product.isActive === false ? "red" : "green"} variant="light">
-                    {product.isActive === false ? "Inactive" : "Active"}
-                  </Badge>
-                  {!product.isPriced ? (
-                    <Badge color="orange" variant="light">
-                      Needs pricing
-                    </Badge>
-                  ) : null}
-                </Group>
+                <Badge
+                  color={
+                    product.isActive === false ? "red" : product.isPriced ? "green" : "orange"
+                  }
+                  variant="light"
+                >
+                  {product.isActive === false
+                    ? "Inactive"
+                    : product.isPriced
+                      ? "Published"
+                      : "Pending pricing"}
+                </Badge>
               </Table.Td>
               <Table.Td ta="right">
-                {canEditProducts ? (
+                {canSetPrice || canEditDetails || canManageProducts ? (
                 <Group gap={4} justify="flex-end">
-                  {!product.isPriced ? (
+                  {canSetPrice && !product.isPriced ? (
                     <Button
                       size="xs"
                       variant="light"
                       color="orange"
                       onClick={() => openPricingOnly(product)}
                     >
-                      Add pricing
+                      Set price
                     </Button>
                   ) : null}
-                  <ActionIcon variant="light" onClick={() => openEdit(product)}>
-                    <IconEdit size={16} />
-                  </ActionIcon>
-                  {product.isActive !== false ? (
+                  {canEditDetails ? (
+                    <ActionIcon variant="light" onClick={() => openEdit(product)}>
+                      <IconEdit size={16} />
+                    </ActionIcon>
+                  ) : null}
+                  {canManageProducts && product.isActive !== false ? (
                     <ActionIcon
                       color="red"
                       variant="light"
@@ -476,16 +650,50 @@ export function ProductsAdminPage() {
               <TextInput label="Barcode" readOnly value={editForm.values.barcode} />
               <TextInput label="SKU" {...editForm.getInputProps("sku")} />
               <TextInput label="Name" required {...editForm.getInputProps("name")} />
-              <TextInput label="Supplier" required {...editForm.getInputProps("supplier")} />
+              <Textarea label="Description" {...editForm.getInputProps("description")} />
+              <Select
+                label="Supplier"
+                placeholder="Search vendors"
+                searchable
+                required
+                data={vendorSelectData}
+                nothingFoundMessage="No matching vendor"
+                value={editForm.values.vendorId || null}
+                onChange={(value) => editForm.setFieldValue("vendorId", value ?? "")}
+                error={editForm.errors.vendorId}
+              />
+              {editForm.values.vendorId ? null : editing?.supplier ? (
+                <Text size="xs" c="dimmed">
+                  Current supplier text: {editing.supplier}. Choose a vendor to link this product.
+                </Text>
+              ) : null}
+              {canAddVendor ? (
+                <Button
+                  variant="subtle"
+                  size="compact-sm"
+                  onClick={() => {
+                    setVendorTarget("edit");
+                    setVendorModalOpen(true);
+                  }}
+                >
+                  Add vendor
+                </Button>
+              ) : null}
               <ProductImagePicker
                 value={editForm.values.imageUrl}
                 onChange={(value) => editForm.setFieldValue("imageUrl", value)}
                 error={editForm.errors.imageUrl as string | undefined}
               />
-              <Group grow>
-                <NumberInput label="Price" min={0} decimalScale={2} required {...editForm.getInputProps("price")} />
-                <NumberInput label="Cost" min={0} decimalScale={2} required {...editForm.getInputProps("cost")} />
-              </Group>
+              {canSetPrice ? (
+                <Group grow>
+                  <NumberInput label="Price" min={0} decimalScale={2} required {...editForm.getInputProps("price")} />
+                  <NumberInput label="Cost" min={0} decimalScale={2} required {...editForm.getInputProps("cost")} />
+                </Group>
+              ) : (
+                <Text size="sm" c="dimmed">
+                  Pricing is handled by a user with the Set product prices permission.
+                </Text>
+              )}
               <Group grow>
                 <NumberInput label="Stock" min={0} {...editForm.getInputProps("onStock")} />
                 <NumberInput label="Low stock at" min={0} {...editForm.getInputProps("lowStockAt")} />
@@ -519,7 +727,8 @@ export function ProductsAdminPage() {
                     sku: values.sku || null,
                     barcode: barcodeMode === "scan" ? values.barcode.trim() : null,
                     name: values.name,
-                    supplier: values.supplier,
+                    description: values.description || null,
+                    vendorId: values.vendorId,
                     imageUrl: values.imageUrl,
                     onStock: values.onStock,
                     categoryId: values.categoryId || null,
@@ -529,6 +738,34 @@ export function ProductsAdminPage() {
                 <Stack gap="sm">
                   <TextInput label="SKU" placeholder="Optional" {...basicForm.getInputProps("sku")} />
                   <TextInput label="Name" required {...basicForm.getInputProps("name")} />
+                  <Textarea label="Description" {...basicForm.getInputProps("description")} />
+                  <Select
+                    label="Supplier"
+                    placeholder="Search vendors"
+                    searchable
+                    required
+                    data={vendorSelectData}
+                    nothingFoundMessage="No matching vendor"
+                    value={basicForm.values.vendorId || null}
+                    onChange={(value) => basicForm.setFieldValue("vendorId", value ?? "")}
+                    error={basicForm.errors.vendorId}
+                  />
+                  {canAddVendor ? (
+                    <Button
+                      variant="subtle"
+                      size="compact-sm"
+                      onClick={() => {
+                        setVendorTarget("create");
+                        setVendorModalOpen(true);
+                      }}
+                    >
+                      Add vendor
+                    </Button>
+                  ) : (
+                    <Text size="xs" c="dimmed">
+                      If the supplier is missing, someone with vendor permission needs to add them.
+                    </Text>
+                  )}
                   <ProductBarcodeField
                     mode={barcodeMode}
                     onModeChange={(mode) => {
@@ -541,7 +778,6 @@ export function ProductsAdminPage() {
                     onChange={(value) => basicForm.setFieldValue("barcode", value)}
                     error={basicForm.errors.barcode as string | undefined}
                   />
-                  <TextInput label="Supplier" required {...basicForm.getInputProps("supplier")} />
                   <ProductImagePicker
                     value={basicForm.values.imageUrl}
                     onChange={(value) => basicForm.setFieldValue("imageUrl", value)}
@@ -555,7 +791,7 @@ export function ProductsAdminPage() {
                     {...basicForm.getInputProps("categoryId")}
                   />
                   <Button type="submit" color="green" loading={createBasicMutation.isPending}>
-                    Save and continue to pricing
+                    {canSetPrice ? "Save and continue to pricing" : "Submit for pricing"}
                   </Button>
                 </Stack>
               </form>
@@ -578,7 +814,7 @@ export function ProductsAdminPage() {
                     <NumberInput label="Cost" min={0} decimalScale={2} required {...pricingForm.getInputProps("cost")} />
                   </Group>
                   <Button type="submit" color="green" loading={pricingMutation.isPending}>
-                    Complete product setup
+                    Publish product
                   </Button>
                 </Stack>
               </form>
@@ -593,7 +829,7 @@ export function ProductsAdminPage() {
           closePricing();
           setPricingProduct(null);
         }}
-        title="Add pricing"
+        title="Set price and publish"
       >
         {pricingProduct ? (
           <form
@@ -611,11 +847,39 @@ export function ProductsAdminPage() {
                 <NumberInput label="Cost" min={0} decimalScale={2} required {...pricingForm.getInputProps("cost")} />
               </Group>
               <Button type="submit" color="green" loading={pricingMutation.isPending}>
-                Save pricing
+                Publish product
               </Button>
             </Stack>
           </form>
         ) : null}
+      </Modal>
+
+      <Modal
+        opened={vendorModalOpen}
+        onClose={() => setVendorModalOpen(false)}
+        title="Add vendor"
+      >
+        <Stack gap="sm">
+          <TextInput
+            label="Vendor name"
+            required
+            value={newVendorName}
+            onChange={(event) => setNewVendorName(event.currentTarget.value)}
+          />
+          <Group justify="flex-end">
+            <Button variant="default" onClick={() => setVendorModalOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              color="green"
+              loading={createVendorMutation.isPending}
+              disabled={!newVendorName.trim()}
+              onClick={() => createVendorMutation.mutate()}
+            >
+              Save vendor
+            </Button>
+          </Group>
+        </Stack>
       </Modal>
     </Stack>
   );

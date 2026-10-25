@@ -18,6 +18,8 @@ export type PermissionKey =
   | "inventory.view"
   | "inventory.manage"
   | "products.view"
+  | "products.details"
+  | "products.price"
   | "products.manage"
   | "categories.view"
   | "categories.manage"
@@ -135,6 +137,8 @@ export type Product = {
   description?: string | null;
   imageUrl: string;
   supplier: string;
+  vendorId?: string | null;
+  vendor?: { id: string; name: string } | null;
   price: number;
   cost?: number | null;
   onStock: number;

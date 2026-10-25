@@ -18,6 +18,8 @@ export type PermissionKey =
   | "inventory.view"
   | "inventory.manage"
   | "products.view"
+  | "products.details"
+  | "products.price"
   | "products.manage"
   | "categories.view"
   | "categories.manage"

@@ -56,7 +56,13 @@ function parseLedgerDate(value: string): Date {
 vendorRoutes.get(
   "/options",
   requireAuth,
-  requireAnyPermission("vendors.view", "vendors.record", "vendors.manage"),
+  requireAnyPermission(
+    "vendors.view",
+    "vendors.record",
+    "vendors.manage",
+    "products.details",
+    "products.manage",
+  ),
   async (c) => {
     const { storeId } = c.get("auth");
     const vendors = await listVendorOptions(storeId);

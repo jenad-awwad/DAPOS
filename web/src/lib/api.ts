@@ -194,7 +194,8 @@ export function createProduct(payload: {
   sku?: string | null;
   barcode?: string | null;
   name: string;
-  supplier: string;
+  supplier?: string;
+  vendorId?: string | null;
   imageUrl: string;
   onStock?: number;
   lowStockAt?: number | null;
@@ -214,6 +215,31 @@ export function setProductPricing(
   return request<{ product: Product }>(`/products/${id}/pricing`, {
     method: "PATCH",
     body: JSON.stringify(payload),
+  });
+}
+
+export type PricingRequest = {
+  id: string;
+  status: "PENDING" | "COMPLETED";
+  submittedAt: string;
+  completedAt: string | null;
+  product: Product;
+  requestedBy: { id: string; name: string };
+  assignedTo: { id: string; name: string } | null;
+  completedBy: { id: string; name: string } | null;
+};
+
+export function fetchPricingRequests() {
+  return request<{
+    requests: PricingRequest[];
+    assignees: { id: string; name: string }[];
+  }>("/products/pricing-requests");
+}
+
+export function assignPricingRequest(id: string, assignedToId: string | null) {
+  return request<{ request: PricingRequest }>(`/products/pricing-requests/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ assignedToId }),
   });
 }
 

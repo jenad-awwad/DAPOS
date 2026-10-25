@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>DAPOS database guide</title>
+  <style>
+    @page { size: A4; margin: 14mm 14mm 16mm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #1c1917;
+      font-family: "Segoe UI", Calibri, sans-serif;
+      font-size: 11pt;
+      line-height: 1.45;
+    }
+    h1 { font-size: 22pt; margin: 0 0 6px; }
+    h2 { font-size: 15pt; margin: 22px 0 8px; page-break-after: avoid; }
+    h3 { font-size: 12pt; margin: 14px 0 4px; page-break-after: avoid; }
+    p { margin: 0 0 8px; }
+    .muted { color: #57534e; }
+    .lead { font-size: 12pt; }
+    table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; page-break-inside: avoid; }
+    th, td { border: 1px solid #d6d3d1; padding: 5px 7px; vertical-align: top; text-align: left; }
+    th { background: #f5f5f4; font-weight: 650; }
+    tr { page-break-inside: avoid; }
+    code { font-family: Consolas, monospace; font-size: 9.5pt; }
+    .note {
+      border: 1px solid #d6d3d1;
+      background: #fafaf9;
+      padding: 8px 10px;
+      margin: 8px 0 12px;
+      page-break-inside: avoid;
+    }
+    .warn { border-color: #d6d3d1; }
+    .diagram { margin: 8px 0 14px; page-break-inside: avoid; }
+    .box {
+      border: 1.5px solid #44403c;
+      background: #fff;
+      min-width: 150px;
+      padding: 6px 8px;
+    }
+    .box strong { display: block; font-size: 10.5pt; }
+    .box span { display: block; color: #57534e; font-size: 8.5pt; }
+    .hub { border-color: #1d4ed8; background: #eff6ff; }
+    .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .arrow { color: #44403c; font-size: 9pt; white-space: nowrap; }
+    ul { margin: 4px 0 10px 18px; padding: 0; }
+    li { margin-bottom: 4px; }
+    .footer { margin-top: 18px; color: #78716c; font-size: 9pt; }
+  </style>
+</head>
+<body>
+  <h1>DAPOS database guide</h1>
+  <p class="lead">A plain-language map of the PostgreSQL database behind the DAPOS portal.</p>
+  <p class="muted">Source: <code>backend/prisma/schema.prisma</code>. Names below are the real table names in the database. This guide does not change the database.</p>
+
+  <div class="note">
+    <strong>How to read a connection.</strong>
+    The parent is the “one” side. The child is the “many” side. The child stores the parent’s id in a foreign key.
+    Example: one vendor can supply many products, so each product row keeps <code>vendorId</code>.
+    Every real link in this database is one-to-many. There is no one-to-one pair and no many-to-many join table.
+    An order and a product meet through <code>order_items</code>.
+  </div>
+
+  <p>There are <strong>18 tables</strong> and <strong>34 foreign keys</strong>. Almost every row belongs to one store. There is no separate permissions table. A role’s permissions are a text list stored on the role, and one person can have a custom list instead.</p>
+
+  <h2>1. Store and staff</h2>
+  <div class="diagram">
+    <div class="row">
+      <div class="box hub"><strong>stores</strong><span>PK id</span></div>
+      <div class="arrow">1 → many<br>storeId</div>
+      <div class="box"><strong>store_roles</strong><span>PK id · FK storeId</span></div>
+      <div class="arrow">1 → many<br>storeRoleId (optional)</div>
+      <div class="box"><strong>users</strong><span>PK id · FK storeId, storeRoleId</span></div>
+    </div>
+    <div class="row">
+      <div class="box hub"><strong>stores</strong><span>PK id</span></div>
+      <div class="arrow">1 → many<br>storeId</div>
+      <div class="box"><strong>users</strong><span>also linked directly to the store</span></div>
+    </div>
+  </div>
+  <p><strong>stores</strong> is the shop: name, address, phone, currency, tax rate, and whether it is active. <code>rolePolicies</code> is an older copy of role permissions stored as JSON, not a link to another table.</p>
+  <p><strong>store_roles</strong> is a job such as Administrator, Cashier, or a custom role. <code>permissions</code> is the list of what that job is allowed to do.</p>
+  <p><strong>users</strong> is a staff person who can sign in, not a shop customer. <code>storeId</code> says which shop they work in. <code>storeRoleId</code> says which job they have, and it can be empty. <code>customPolicies</code> is an optional personal permission list.</p>
+
+  <h2>2. Products, categories, vendors, and pricing</h2>
+  <div class="diagram">
+    <div class="row">
+      <div class="box hub"><strong>stores</strong><span>PK id</span></div>
+      <div class="arrow">1 → many</div>
+      <div class="box"><strong>categories</strong><span>FK storeId</span></div>
+      <div class="arrow">1 → many<br>categoryId optional</div>
+      <div class="box"><strong>products</strong><span>FK storeId, categoryId, vendorId</span></div>
+    </div>
+    <div class="row">
+      <div class="box"><strong>vendors</strong><span>FK storeId</span></div>
+      <div class="arrow">1 → many<br>vendorId optional</div>
+      <div class="box"><strong>products</strong><span>also stores the vendor name in supplier</span></div>
+      <div class="arrow">1 → many<br>productId</div>
+      <div class="box"><strong>product_pricing_requests</strong><span>FK productId, requestedById, assignedToId, completedById</span></div>
+    </div>
+    <div class="row">
+      <div class="box"><strong>users</strong><span>PK id</span></div>
+      <div class="arrow">1 → many, three different links</div>
+      <div class="box"><strong>product_pricing_requests</strong><span>who asked, who is assigned, who finished</span></div>
+    </div>
+  </div>
+  <p><strong>categories</strong> groups products, for example Beverages. A product does not have to have a category.</p>
+  <p><strong>vendors</strong> is the supplier list. The unique name check uses <code>normalizedName</code> so the same vendor is not stored twice under a slightly different spelling.</p>
+  <p><strong>products</strong> is an item. <code>vendorId</code> points at the chosen supplier. <code>supplier</code> also keeps that vendor’s name as text. <code>isPriced</code> is false until a price is published, so the point of sale will not sell it yet. <code>price</code> starts at 0.</p>
+  <p><strong>product_pricing_requests</strong> is the request that a new item still needs a price. It records who submitted the details, who is assigned, who completed it, the status (PENDING or COMPLETED), the submission time, and the completion time.</p>
+
+  <h2>3. Customers and sales</h2>
+  <div class="diagram">
+    <div class="row">
+      <div class="box"><strong>users</strong><span>the cashier</span></div>
+      <div class="arrow">1 → many<br>cashierId</div>
+      <div class="box"><strong>orders</strong><span>FK storeId, cashierId, customerId</span></div>
+      <div class="arrow">optional<br>customerId</div>
+      <div class="box"><strong>customers</strong><span>FK storeId</span></div>
+    </div>
+    <div class="row">
+      <div class="box"><strong>orders</strong><span>PK id</span></div>
+      <div class="arrow">1 → many</div>
+      <div class="box"><strong>order_items</strong><span>FK orderId, productId</span></div>
+      <div class="arrow">many → 1</div>
+      <div class="box"><strong>products</strong><span>PK id</span></div>
+    </div>
+    <div class="row">
+      <div class="box"><strong>orders</strong><span>PK id</span></div>
+      <div class="arrow">1 → many</div>
+      <div class="box"><strong>payments</strong><span>FK orderId</span></div>
+    </div>
+    <div class="row">
+      <div class="box"><strong>orders</strong><span>project jobs use the same table</span></div>
+      <div class="arrow">1 → many</div>
+      <div class="box"><strong>order_project_materials</strong><span>FK orderId · vendor is text</span></div>
+      <div class="arrow">1 → many</div>
+      <div class="box"><strong>order_project_adjustments</strong><span>FK orderId, userId</span></div>
+    </div>
+  </div>
+  <p><strong>customers</strong> is a shopper, used for loyalty and for linking some sales. A sale does not have to have a customer.</p>
+  <p><strong>orders</strong> is both a regular sale and a project job. <code>orderType</code> says which. <code>cashierId</code> is the staff user who created it.</p>
+  <p><strong>order_items</strong> is one line on a receipt. It points at the product and also copies the product name, SKU, and the price that was charged, so later price changes do not rewrite old receipts.</p>
+  <p><strong>payments</strong> is money taken for that order. One order can have more than one payment.</p>
+  <p><strong>order_project_materials</strong> lists raw materials on a project. The vendor on that line is a typed name, not a link to <code>vendors</code>. <strong>order_project_adjustments</strong> is a note about a change, and who wrote it.</p>
+
+  <h2>4. Calendar</h2>
+  <div class="diagram">
+    <div class="row">
+      <div class="box hub"><strong>stores</strong><span>PK id</span></div>
+      <div class="arrow">1 → many</div>
+      <div class="box"><strong>calendar_events</strong><span>FK storeId, orderId, customerId</span></div>
+      <div class="arrow">1 → many</div>
+      <div class="box"><strong>calendar_event_payments</strong><span>FK calendarEventId</span></div>
+    </div>
+  </div>
+  <p>An activity can optionally point at one order and one customer. It also copies <code>customerName</code> and <code>customerPhone</code> as text. Partial payments for an activity are separate rows in <code>calendar_event_payments</code>.</p>
+
+  <h2>5. Stock and the vendor ledger</h2>
+  <div class="diagram">
+    <div class="row">
+      <div class="box"><strong>products</strong><span>PK id</span></div>
+      <div class="arrow">1 → many<br>productId</div>
+      <div class="box"><strong>stock_movements</strong><span>FK storeId, productId, userId</span></div>
+      <div class="arrow">optional user</div>
+      <div class="box"><strong>users</strong><span>PK id</span></div>
+    </div>
+    <div class="row">
+      <div class="box"><strong>vendors</strong><span>PK id</span></div>
+      <div class="arrow">1 → many</div>
+      <div class="box"><strong>vendor_invoices</strong><span>FK storeId, vendorId</span></div>
+    </div>
+    <div class="row">
+      <div class="box"><strong>vendors</strong><span>PK id</span></div>
+      <div class="arrow">1 → many</div>
+      <div class="box"><strong>vendor_payments</strong><span>FK storeId, vendorId</span></div>
+    </div>
+  </div>
+  <p><strong>stock_movements</strong> is the history of stock going up or down. <code>orderId</code> on that table is stored as text only. The database does not force it to match a real order.</p>
+  <p><strong>vendor_invoices</strong> is a bill from a supplier. <strong>vendor_payments</strong> is money paid to that supplier. Both belong to one vendor.</p>
+
+  <h2>Full relationship list</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Parent (one)</th>
+        <th>Child (many)</th>
+        <th>Foreign key on the child</th>
+        <th>Required?</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>stores</td><td>store_roles</td><td>storeId</td><td>Yes</td></tr>
+      <tr><td>stores</td><td>users</td><td>storeId</td><td>Yes</td></tr>
+      <tr><td>store_roles</td><td>users</td><td>storeRoleId</td><td>No</td></tr>
+      <tr><td>stores</td><td>categories</td><td>storeId</td><td>Yes</td></tr>
+      <tr><td>stores</td><td>products</td><td>storeId</td><td>Yes</td></tr>
+      <tr><td>categories</td><td>products</td><td>categoryId</td><td>No</td></tr>
+      <tr><td>vendors</td><td>products</td><td>vendorId</td><td>No</td></tr>
+      <tr><td>stores</td><td>product_pricing_requests</td><td>storeId</td><td>Yes</td></tr>
+      <tr><td>products</td><td>product_pricing_requests</td><td>productId</td><td>Yes</td></tr>
+      <tr><td>users</td><td>product_pricing_requests</td><td>requestedById</td><td>Yes</td></tr>
+      <tr><td>users</td><td>product_pricing_requests</td><td>assignedToId</td><td>No</td></tr>
+      <tr><td>users</td><td>product_pricing_requests</td><td>completedById</td><td>No</td></tr>
+      <tr><td>stores</td><td>customers</td><td>storeId</td><td>Yes</td></tr>
+      <tr><td>stores</td><td>orders</td><td>storeId</td><td>Yes</td></tr>
+      <tr><td>users</td><td>orders</td><td>cashierId</td><td>Yes</td></tr>
+      <tr><td>customers</td><td>orders</td><td>customerId</td><td>No</td></tr>
+      <tr><td>orders</td><td>order_items</td><td>orderId</td><td>Yes</td></tr>
+      <tr><td>products</td><td>order_items</td><td>productId</td><td>Yes</td></tr>
+      <tr><td>orders</td><td>payments</td><td>orderId</td><td>Yes</td></tr>
+      <tr><td>orders</td><td>order_project_materials</td><td>orderId</td><td>Yes</td></tr>
+      <tr><td>orders</td><td>order_project_adjustments</td><td>orderId</td><td>Yes</td></tr>
+      <tr><td>users</td><td>order_project_adjustments</td><td>userId</td><td>Yes</td></tr>
+      <tr><td>stores</td><td>calendar_events</td><td>storeId</td><td>Yes</td></tr>
+      <tr><td>orders</td><td>calendar_events</td><td>orderId</td><td>No</td></tr>
+      <tr><td>customers</td><td>calendar_events</td><td>customerId</td><td>No</td></tr>
+      <tr><td>calendar_events</td><td>calendar_event_payments</td><td>calendarEventId</td><td>Yes</td></tr>
+      <tr><td>stores</td><td>stock_movements</td><td>storeId</td><td>Yes</td></tr>
+      <tr><td>products</td><td>stock_movements</td><td>productId</td><td>Yes</td></tr>
+      <tr><td>users</td><td>stock_movements</td><td>userId</td><td>No</td></tr>
+      <tr><td>stores</td><td>vendors</td><td>storeId</td><td>Yes</td></tr>
+      <tr><td>stores</td><td>vendor_invoices</td><td>storeId</td><td>Yes</td></tr>
+      <tr><td>vendors</td><td>vendor_invoices</td><td>vendorId</td><td>Yes</td></tr>
+      <tr><td>stores</td><td>vendor_payments</td><td>storeId</td><td>Yes</td></tr>
+      <tr><td>vendors</td><td>vendor_payments</td><td>vendorId</td><td>Yes</td></tr>
+    </tbody>
+  </table>
+
+  <h2>What happens when you add a product</h2>
+  <h3>1. Item details are saved</h3>
+  <p>A new row is inserted into <code>products</code>. <code>storeId</code> is your store. If you chose a category, <code>categoryId</code> points at <code>categories</code>. If you chose a supplier, <code>vendorId</code> points at <code>vendors</code>, and <code>supplier</code> is filled with that vendor’s name. <code>price</code> is 0 and <code>isPriced</code> is false, so it cannot be sold yet.</p>
+  <h3>2. A pricing request is opened</h3>
+  <p>A row is inserted into <code>product_pricing_requests</code>. <code>productId</code> points at the new product. <code>requestedById</code> points at the staff user who submitted the details. <code>status</code> is PENDING. <code>submittedAt</code> is the submission time. Assignment and completion stay empty.</p>
+  <h3>3. An authorized person sets the price</h3>
+  <p>The product row is updated with <code>price</code>, <code>cost</code>, and <code>isPriced</code> = true. The request becomes COMPLETED. <code>completedAt</code> and <code>completedById</code> record when and who. The item can then be sold.</p>
+  <h3>4. A later sale</h3>
+  <p>An <code>orders</code> row is created for the cashier and, if used, the customer. Each line becomes an <code>order_items</code> row pointing at the order and the product, with a copy of the name and the price charged. A <code>payments</code> row records the money. A <code>stock_movements</code> row records the stock drop.</p>
+
+  <h2>Columns that look connected but are not enforced</h2>
+  <div class="note warn">
+    <p>These values are stored as ids or names, but the schema does not declare a foreign key. The database will not stop a bad id, and deleting the related row will not update them.</p>
+    <ul>
+      <li><code>stock_movements.orderId</code> is not linked to <code>orders</code>.</li>
+      <li><code>vendor_invoices.sourceOrderId</code> is not linked to <code>orders</code>.</li>
+      <li><code>vendor_invoices.orderProjectMaterialId</code> is unique text, not a link to <code>order_project_materials</code>.</li>
+      <li><code>vendor_invoices.createdById</code> and <code>vendor_payments.createdById</code> are not linked to <code>users</code>.</li>
+      <li><code>order_project_materials.vendor</code> is a typed name, not <code>vendors.id</code>.</li>
+    </ul>
+  </div>
+
+  <h2>The same fact stored twice</h2>
+  <ul>
+    <li><code>products.supplier</code> copies the vendor name even though <code>products.vendorId</code> already points at the vendor. Renaming a vendor can leave the old name on the product.</li>
+    <li>Permissions live in three JSON places: <code>store_roles.permissions</code>, <code>users.customPolicies</code>, and the older <code>stores.rolePolicies</code>. There is no permissions table.</li>
+    <li><code>calendar_events</code> copies <code>customerName</code> and <code>customerPhone</code> beside <code>customerId</code>.</li>
+    <li><code>order_items</code> copies product name, SKU, and price on purpose, so old receipts stay accurate.</li>
+  </ul>
+
+  <h2>Suggestions only — nothing was changed</h2>
+  <ul>
+    <li>Make the text id columns above into real foreign keys.</li>
+    <li>Link project materials to <code>vendors</code> the same way products are linked.</li>
+    <li>Keep the vendor name in one place, or update the copied name when a vendor is renamed.</li>
+    <li>Allow only one open pricing request per product.</li>
+  </ul>
+
+  <p class="footer">DAPOS database guide. Generated from the Prisma schema. No tables were invented, and the database structure was not modified.</p>
+</body>
+</html>
