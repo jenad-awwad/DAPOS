@@ -1,0 +1,7 @@
+.git
+**/node_modules
+backend/.env
+backend/uploads
+web/.env
+web/.env.development
+LENOVO-Cursor-Chats

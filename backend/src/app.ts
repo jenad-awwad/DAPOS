@@ -26,6 +26,8 @@ import { vendorRoutes } from "./routes/vendors.js";
 
 import { uploadRoutes } from "./routes/uploads.js";
 
+import { mountPortalAssets, mountPortalPages } from "./lib/portal.js";
+
 import type { AppEnv } from "./middleware/auth.js";
 
 
@@ -35,6 +37,8 @@ export const app = new Hono<AppEnv>();
 
 
 app.use("*", cors());
+
+mountPortalPages(app);
 
 
 
@@ -65,6 +69,8 @@ app.route("/calendar", calendarRoutes);
 app.route("/vendors", vendorRoutes);
 
 app.route("/uploads", uploadRoutes);
+
+mountPortalAssets(app);
 
 
 
