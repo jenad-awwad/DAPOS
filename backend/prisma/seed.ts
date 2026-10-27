@@ -1,7 +1,24 @@
+import { randomInt } from "node:crypto";
 import { PrismaClient, UserRole, Currency } from "@prisma/client";
+import { hashPin } from "../src/lib/pin.js";
 import { ensureStoreRoles } from "../src/services/store-roles.js";
 
+if (process.env.NODE_ENV === "production" && process.env.ALLOW_SEED !== "1") {
+  throw new Error("Refusing to seed production. Set ALLOW_SEED=1 to override.");
+}
+
 const prisma = new PrismaClient();
+
+function seedAdminPin(): string {
+  const configured = process.env.SEED_ADMIN_PIN?.trim();
+  if (configured) {
+    if (!/^\d{6}$/.test(configured)) {
+      throw new Error("SEED_ADMIN_PIN must be exactly 6 digits");
+    }
+    return configured;
+  }
+  return String(randomInt(0, 1_000_000)).padStart(6, "0");
+}
 
 async function main() {
   const store = await prisma.store.upsert({
@@ -22,6 +39,8 @@ async function main() {
     where: { storeId: store.id, systemCode: UserRole.ADMIN },
   });
 
+  const adminPin = seedAdminPin();
+  const pinHash = await hashPin(adminPin);
   const admin = await prisma.user.upsert({
     where: {
       storeId_phone: {
@@ -30,7 +49,10 @@ async function main() {
       },
     },
     update: {
-      pin: "1234",
+      pin: null,
+      pinHash,
+      failedPinAttempts: 0,
+      lockedUntil: null,
       name: "Store Admin",
       role: UserRole.ADMIN,
       storeRoleId: adminRole?.id,
@@ -41,7 +63,8 @@ async function main() {
       name: "Store Admin",
       role: UserRole.ADMIN,
       storeRoleId: adminRole?.id,
-      pin: "1234",
+      pin: null,
+      pinHash,
     },
   });
 
@@ -133,7 +156,7 @@ async function main() {
 
   console.log("Seed complete:");
   console.log(`  Store:    ${store.name} (${store.currency})`);
-  console.log(`  Admin:    ${admin.phone}  PIN: ${admin.pin}`);
+  console.log(`  Admin:    ${admin.phone}  PIN: ${adminPin}`);
   console.log(`  Currency: ILS | USD | JOD`);
   console.log(`  Items:    ${products.length} products in 2 categories`);
 }

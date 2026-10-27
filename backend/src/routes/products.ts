@@ -3,7 +3,9 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
-import { loadUserPermissions, requireAnyPermission } from "../middleware/permissions.js";
+import { requireAnyPermission } from "../middleware/permissions.js";
+import { errorResponse } from "../lib/errors.js";
+import { recordAudit } from "../lib/audit.js";
 import { canViewCost, withCostVisibility } from "../lib/cost-visibility.js";
 import { userHasPermission } from "../lib/permissions.js";
 import { persistProductImage, withProductImageUrl } from "../lib/product-images.js";
@@ -121,7 +123,7 @@ export const productRoutes = new Hono<AppEnv>();
 productRoutes.get("/", requireAuth, async (c) => {
   const auth = c.get("auth");
   const { storeId } = auth;
-  const showCost = canViewCost(await loadUserPermissions(storeId, auth.sub));
+  const showCost = canViewCost(c.get("permissions"));
   const parsed = listProductsQuerySchema.safeParse({
     search: c.req.query("search"),
     name: c.req.query("name"),
@@ -209,7 +211,7 @@ productRoutes.get("/barcode/:barcode", requireAuth, async (c) => {
     return c.json({ error: "Product not found" }, 404);
   }
 
-  const showCost = canViewCost(await loadUserPermissions(storeId, sub));
+  const showCost = canViewCost(c.get("permissions"));
   return c.json({ product: productOut(product, c.req.url, showCost) });
 });
 
@@ -256,8 +258,7 @@ productRoutes.patch(
         request: { ...out, product: withProductImageUrl(out.product, c.req.url) },
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not assign request";
-      return c.json({ error: message }, 400);
+      return errorResponse(c, error, "Could not assign request");
     }
   },
 );
@@ -318,8 +319,7 @@ productRoutes.post(
     });
     return c.json({ product: productOut(product, c.req.url) }, 201);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not create product";
-    return c.json({ error: message }, 400);
+    return errorResponse(c, error, "Could not create product");
   }
 });
 
@@ -346,8 +346,7 @@ productRoutes.patch(
     );
     return c.json({ product: productOut(product, c.req.url) });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not set pricing";
-    return c.json({ error: message }, 400);
+    return errorResponse(c, error, "Could not set pricing");
   }
 });
 
@@ -364,7 +363,7 @@ productRoutes.get("/:id", requireAuth, async (c) => {
     return c.json({ error: "Product not found" }, 404);
   }
 
-  const showCost = canViewCost(await loadUserPermissions(storeId, sub));
+  const showCost = canViewCost(c.get("permissions"));
   return c.json({ product: productOut(product, c.req.url, showCost) });
 });
 
@@ -374,7 +373,7 @@ productRoutes.patch(
   requireAnyPermission("products.details", "products.price", "products.manage"),
   async (c) => {
   const { storeId, sub } = c.get("auth");
-  const permissions = await loadUserPermissions(storeId, sub);
+  const permissions = c.get("permissions");
   const canEditDetails =
     userHasPermission(permissions, "products.details") ||
     userHasPermission(permissions, "products.manage");
@@ -461,13 +460,13 @@ productRoutes.patch(
     try {
       storedImageUrl = await persistProductImage(parsed.data.imageUrl, storeId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not save product photo";
-      return c.json({ error: message }, 400);
+      return errorResponse(c, error, "Could not save product photo");
     }
   }
 
   try {
-    const product = await prisma.product.update({
+    const product = await prisma.$transaction(async (tx) => {
+    const updated = await tx.product.update({
       where: { id: existing.id },
       data: {
         ...(parsed.data.sku !== undefined ? { sku: parsed.data.sku?.trim() || null } : {}),
@@ -498,7 +497,7 @@ productRoutes.patch(
       include: { category: true, vendor: { select: { id: true, name: true } } },
     });
     if (pricingComplete && touchesPrice) {
-      await prisma.productPricingRequest.updateMany({
+      await tx.productPricingRequest.updateMany({
         where: { storeId, productId: existing.id, status: "PENDING" },
         data: {
           status: "COMPLETED",
@@ -507,9 +506,24 @@ productRoutes.patch(
         },
       });
     }
+    if (touchesPrice) {
+      await recordAudit(tx, {
+        storeId,
+        actorId: sub,
+        action: "product.price_change",
+        entityType: "product",
+        entityId: existing.id,
+        details: {
+          price: parsed.data.price,
+          cost: parsed.data.cost,
+        },
+      });
+    }
+    return updated;
+    });
     return c.json({ product: productOut(product, c.req.url) });
-  } catch {
-    return c.json({ error: "SKU already exists" }, 400);
+  } catch (error) {
+    return errorResponse(c, error, "Could not update product");
   }
 });
 

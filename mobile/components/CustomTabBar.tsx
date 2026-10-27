@@ -1,9 +1,23 @@
 import { Ionicons } from "@expo/vector-icons";
-import { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { router } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors } from "../lib/theme";
+
+type CustomTabBarProps = {
+  state: {
+    index: number;
+    routes: { key: string; name: string }[];
+  };
+  navigation: {
+    emit: (event: {
+      type: "tabPress";
+      target: string;
+      canPreventDefault: true;
+    }) => { defaultPrevented: boolean };
+    navigate: (name: string) => void;
+  };
+};
 
 const TAB_META: Record<string, { label: string; icon: keyof typeof Ionicons.glyphMap }> = {
   index: { label: "Home", icon: "home" },
@@ -12,7 +26,7 @@ const TAB_META: Record<string, { label: string; icon: keyof typeof Ionicons.glyp
   reports: { label: "Reports", icon: "bar-chart" },
 };
 
-export function CustomTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
+export function CustomTabBar({ state, navigation }: CustomTabBarProps) {
   const insets = useSafeAreaInsets();
 
   return (

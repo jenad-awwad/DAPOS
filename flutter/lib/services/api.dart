@@ -6,12 +6,15 @@ import '../models/models.dart';
 import 'token_storage.dart';
 
 class ApiException implements Exception {
-  ApiException(this.message);
+  ApiException(this.message, {this.statusCode});
   final String message;
+  final int? statusCode;
 
   @override
   String toString() => message;
 }
+
+typedef UnauthorizedCallback = void Function();
 
 class ApiClient {
   ApiClient({TokenStorage? tokenStorage, String? baseUrl})
@@ -19,11 +22,12 @@ class ApiClient {
         baseUrl = baseUrl ??
             const String.fromEnvironment(
               'API_URL',
-              defaultValue: 'https://dapos-api-production.up.railway.app',
+              defaultValue: 'https://dapos.up.railway.app',
             );
 
   final TokenStorage _tokens;
   final String baseUrl;
+  UnauthorizedCallback? onUnauthorized;
 
   Future<T> _request<T>(
     String path, {
@@ -57,8 +61,15 @@ class ApiClient {
     final data = decoded is Map<String, dynamic> ? decoded : <String, dynamic>{};
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      if (response.statusCode == 401 && path != '/auth/login') {
+        await _tokens.clear();
+        onUnauthorized?.call();
+      }
       final error = data['error'];
-      throw ApiException(error is String ? error : 'Request failed');
+      throw ApiException(
+        error is String ? error : 'Request failed',
+        statusCode: response.statusCode,
+      );
     }
 
     if (parse != null) return parse(data);

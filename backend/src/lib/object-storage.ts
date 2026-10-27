@@ -1,3 +1,4 @@
+import { AppError } from "./errors.js";
 import {
   GetObjectCommand,
   PutObjectCommand,
@@ -6,13 +7,21 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, normalize, sep } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
-const LOCAL_UPLOAD_ROOT = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "../../uploads",
-);
+function localUploadRoot(): string {
+  const configured = process.env.UPLOAD_DIR?.trim();
+  if (configured) return configured;
+  return join(dirname(fileURLToPath(import.meta.url)), "../../uploads");
+}
+
+export function storageMode(): "s3" | "volume" | "local" | "ephemeral" {
+  if (isRemoteStorageConfigured()) return "s3";
+  if (process.env.UPLOAD_DIR?.trim()) return "volume";
+  if (process.env.NODE_ENV === "production") return "ephemeral";
+  return "local";
+}
 
 function storageConfig() {
   const bucket = process.env.S3_BUCKET?.trim();
@@ -57,10 +66,6 @@ function getClient() {
   return { client, config };
 }
 
-export function isObjectStorageConfigured(): boolean {
-  return true;
-}
-
 /** True when files live in S3-compatible storage rather than on the local disk. */
 export function isRemoteStorageConfigured(): boolean {
   return getClient() != null;
@@ -92,10 +97,11 @@ export function isProductImageKey(key: string): boolean {
 }
 
 function localFilePath(key: string): string {
-  const resolved = normalize(join(LOCAL_UPLOAD_ROOT, key));
-  const root = normalize(LOCAL_UPLOAD_ROOT + sep);
-  if (!resolved.startsWith(root) && resolved !== normalize(LOCAL_UPLOAD_ROOT)) {
-    throw new Error("Invalid attachment path");
+  const rootDir = localUploadRoot();
+  const resolved = normalize(join(rootDir, key));
+  const root = normalize(rootDir + sep);
+  if (!resolved.startsWith(root) && resolved !== normalize(rootDir)) {
+    throw new AppError("Invalid attachment path");
   }
   return resolved;
 }
@@ -125,6 +131,7 @@ async function uploadToFolder(
       Key: key,
       Body: buffer,
       ContentType: contentType,
+      ContentDisposition: "inline",
     }),
   );
 
@@ -192,7 +199,7 @@ export function assertStoreAttachmentKey(
     !isSafeAttachmentKey(trimmed) ||
     !trimmed.startsWith(`stores/${storeId}/vendor-attachments/`)
   ) {
-    throw new Error("Invalid attachment");
+    throw new AppError("Invalid attachment");
   }
   return trimmed;
 }
@@ -207,6 +214,37 @@ export async function withAttachmentUrl<T extends { attachmentKey?: string | nul
   };
 }
 
+function attachmentMacKey(): Buffer {
+  const secret = process.env.JWT_SECRET ?? "";
+  if (secret.length < 32) {
+    throw new Error("JWT_SECRET must be set to at least 32 characters");
+  }
+  return createHmac("sha256", secret).update("attachment-url-v1").digest();
+}
+
+export function signAttachmentAccess(key: string, exp: number): string {
+  return createHmac("sha256", attachmentMacKey())
+    .update(`${key}.${exp}`)
+    .digest("base64url");
+}
+
+export function attachmentAccessValid(key: string, exp: string | undefined, sig: string | undefined): boolean {
+  if (!exp || !sig) return false;
+  const expNum = Number(exp);
+  if (!Number.isFinite(expNum) || expNum < Math.floor(Date.now() / 1000)) return false;
+  const expected = signAttachmentAccess(key, expNum);
+  const left = Buffer.from(expected);
+  const right = Buffer.from(sig);
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
+}
+
+function privateFileUrl(key: string, requestUrl?: string): string {
+  const exp = Math.floor(Date.now() / 1000) + 60 * 60;
+  const sig = signAttachmentAccess(key, exp);
+  return `${apiPublicOrigin(requestUrl)}/uploads/files/${key}?exp=${exp}&sig=${encodeURIComponent(sig)}`;
+}
+
 export async function resolveAttachmentUrl(
   key: string | null | undefined,
   requestUrl?: string,
@@ -215,7 +253,7 @@ export async function resolveAttachmentUrl(
 
   const ctx = getClient();
   if (ctx) {
-    if (ctx.config.publicBaseUrl) {
+    if (isProductImageKey(key) && ctx.config.publicBaseUrl) {
       const base = ctx.config.publicBaseUrl.replace(/\/$/, "");
       return `${base}/${key}`;
     }
@@ -225,15 +263,52 @@ export async function resolveAttachmentUrl(
       new GetObjectCommand({
         Bucket: ctx.config.bucket,
         Key: key,
+        ResponseContentDisposition: "inline",
       }),
       { expiresIn: 60 * 60 },
     );
   }
 
-  return `${apiPublicOrigin(requestUrl)}/uploads/files/${key}`;
+  if (isProductImageKey(key)) {
+    return `${apiPublicOrigin(requestUrl)}/uploads/files/${key}`;
+  }
+  return privateFileUrl(key, requestUrl);
 }
 
 const DATA_URL_RE = /^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/;
+
+export function sniffImageType(buffer: Buffer): { contentType: string; ext: string } | null {
+  if (
+    buffer.length >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    return { contentType: "image/png", ext: "png" };
+  }
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return { contentType: "image/jpeg", ext: "jpg" };
+  }
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return { contentType: "image/webp", ext: "webp" };
+  }
+  if (buffer.length >= 6) {
+    const head = buffer.subarray(0, 6).toString("ascii");
+    if (head === "GIF87a" || head === "GIF89a") {
+      return { contentType: "image/gif", ext: "gif" };
+    }
+  }
+  return null;
+}
 
 export function parseImageDataUrl(dataUrl: string): {
   contentType: string;
@@ -244,8 +319,9 @@ export function parseImageDataUrl(dataUrl: string): {
 
   try {
     const buffer = Buffer.from(match[2], "base64");
-    if (buffer.length === 0) return null;
-    return { contentType: match[1], buffer };
+    const sniffed = sniffImageType(buffer);
+    if (!sniffed) return null;
+    return { contentType: sniffed.contentType, buffer };
   } catch {
     return null;
   }

@@ -107,6 +107,9 @@ model Store {
   vendors          Vendor[]
   vendorInvoices   VendorInvoice[]
   vendorPayments   VendorPayment[]
+  auditLogs        AuditLog[]
+  orderSeq         Int                 @default(0)
+  vendorInvoiceSeq Int                 @default(0)
 
   @@map("stores")
 }
@@ -137,9 +140,13 @@ model User {
   name      String
   role      UserRole @default(CASHIER)
   storeRoleId String?
-  pin       String   @db.VarChar(6)
-  isActive  Boolean  @default(true)
-  customPolicies Json?
+  pin               String?  @db.VarChar(6)
+  pinHash           String?
+  failedPinAttempts Int      @default(0)
+  lockedUntil       DateTime?
+  tokenVersion      Int      @default(0)
+  isActive          Boolean  @default(true)
+  customPolicies    Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -151,6 +158,8 @@ model User {
   pricingRequestsMade      ProductPricingRequest[] @relation("PricingRequestedBy")
   pricingRequestsAssigned  ProductPricingRequest[] @relation("PricingAssignedTo")
   pricingRequestsCompleted ProductPricingRequest[] @relation("PricingCompletedBy")
+  voidedOrders             Order[]                 @relation("OrderVoidedBy")
+  auditLogs                AuditLog[]
 
   @@unique([storeId, phone])
   @@index([storeId, isActive])
@@ -292,12 +301,15 @@ model Order {
   projectSellQuantity Decimal?    @db.Decimal(12, 3)
   projectSellUnitPrice Decimal?   @db.Decimal(12, 2)
   completedAt         DateTime?
-  voidedAt      DateTime?
-  createdAt     DateTime    @default(now())
+  voidedAt            DateTime?
+  voidedById          String?
+  loyaltyPointsEarned Int       @default(0)
+  createdAt           DateTime  @default(now())
   updatedAt     DateTime    @updatedAt
 
   store            Store                 @relation(fields: [storeId], references: [id], onDelete: Cascade)
   cashier          User                  @relation(fields: [cashierId], references: [id], onDelete: Restrict)
+  voidedBy         User?                 @relation("OrderVoidedBy", fields: [voidedById], references: [id], onDelete: SetNull)
   customer         Customer?             @relation(fields: [customerId], references: [id], onDelete: SetNull)
   items            OrderItem[]
   payments         Payment[]
@@ -514,4 +526,22 @@ model VendorPayment {
   @@index([storeId, paidAt])
   @@index([vendorId])
   @@map("vendor_payments")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  storeId    String
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String?
+  details    Json?
+  createdAt  DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, createdAt])
+  @@index([storeId, entityType, entityId])
+  @@map("audit_logs")
 }

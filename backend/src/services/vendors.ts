@@ -1,9 +1,10 @@
+import { AppError } from "../lib/errors.js";
 import {
   VendorLedgerSource,
   type Prisma,
 } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
-import { resolveAttachmentUrl } from "../lib/object-storage.js";
+import { assertStoreAttachmentKey, resolveAttachmentUrl } from "../lib/object-storage.js";
 
 export function normalizeVendorName(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, " ");
@@ -46,7 +47,7 @@ export async function computeVendorBalance(
     where: { id: vendorId, storeId },
   });
   if (!vendor) {
-    throw new Error("Vendor not found");
+    throw new AppError("Vendor not found");
   }
 
   const invoiceAgg = await tx.vendorInvoice.aggregate({
@@ -107,11 +108,16 @@ export async function syncProjectOrderVendorInvoices(
   }
 }
 
-async function nextManualInvoiceNumber(storeId: string): Promise<string> {
-  const count = await prisma.vendorInvoice.count({
-    where: { storeId, source: VendorLedgerSource.MANUAL },
+async function nextManualInvoiceNumber(
+  tx: Prisma.TransactionClient,
+  storeId: string,
+): Promise<string> {
+  const { vendorInvoiceSeq } = await tx.store.update({
+    where: { id: storeId },
+    data: { vendorInvoiceSeq: { increment: 1 } },
+    select: { vendorInvoiceSeq: true },
   });
-  return `INV-${String(count + 1).padStart(5, "0")}`;
+  return `INV-${String(vendorInvoiceSeq).padStart(5, "0")}`;
 }
 
 export async function listVendorInvoices(storeId: string, requestUrl?: string) {
@@ -187,12 +193,12 @@ export async function createVendor(
 ) {
   const name = input.name.trim();
   if (!name) {
-    throw new Error("Vendor name is required");
+    throw new AppError("Vendor name is required");
   }
 
   const startingBalance = roundMoney(input.startingBalance ?? 0);
   if (startingBalance < 0) {
-    throw new Error("Starting balance cannot be negative");
+    throw new AppError("Starting balance cannot be negative");
   }
 
   const normalizedName = normalizeVendorName(name);
@@ -200,7 +206,7 @@ export async function createVendor(
     where: { storeId, normalizedName },
   });
   if (existing) {
-    throw new Error("A vendor with this name already exists");
+    throw new AppError("A vendor with this name already exists");
   }
 
   return prisma.vendor.create({
@@ -225,14 +231,14 @@ export async function createManualVendorInvoice(input: {
   attachmentKey?: string | null;
 }) {
   if (input.total <= 0) {
-    throw new Error("Invoice total must be greater than zero");
+    throw new AppError("Invoice total must be greater than zero");
   }
 
   return prisma.$transaction(async (tx) => {
     let vendorId = input.vendorId;
     if (!vendorId) {
       if (!input.vendorName?.trim()) {
-        throw new Error("Vendor is required");
+        throw new AppError("Vendor is required");
       }
       const vendor = await upsertVendorByName(
         tx,
@@ -245,17 +251,17 @@ export async function createManualVendorInvoice(input: {
         where: { id: vendorId, storeId: input.storeId },
       });
       if (!vendor) {
-        throw new Error("Vendor not found");
+        throw new AppError("Vendor not found");
       }
     }
 
     const auto = input.invoiceNumberAuto === true;
     const invoiceNumber = auto
-      ? await nextManualInvoiceNumber(input.storeId)
+      ? await nextManualInvoiceNumber(tx, input.storeId)
       : input.invoiceNumber?.trim();
 
     if (!invoiceNumber) {
-      throw new Error("Invoice number is required");
+      throw new AppError("Invoice number is required");
     }
 
     return tx.vendorInvoice.create({
@@ -266,7 +272,7 @@ export async function createManualVendorInvoice(input: {
         invoiceNumber,
         invoiceNumberAuto: auto,
         total: roundMoney(input.total),
-        attachmentKey: input.attachmentKey ?? null,
+        attachmentKey: assertStoreAttachmentKey(input.storeId, input.attachmentKey),
         source: VendorLedgerSource.MANUAL,
         createdById: input.userId,
       },
@@ -285,14 +291,14 @@ export async function createVendorPayment(input: {
   attachmentKey?: string | null;
 }) {
   if (input.amount <= 0) {
-    throw new Error("Payment amount must be greater than zero");
+    throw new AppError("Payment amount must be greater than zero");
   }
 
   return prisma.$transaction(async (tx) => {
     let vendorId = input.vendorId;
     if (!vendorId) {
       if (!input.vendorName?.trim()) {
-        throw new Error("Vendor is required");
+        throw new AppError("Vendor is required");
       }
       const vendor = await upsertVendorByName(
         tx,
@@ -305,7 +311,7 @@ export async function createVendorPayment(input: {
         where: { id: vendorId, storeId: input.storeId },
       });
       if (!vendor) {
-        throw new Error("Vendor not found");
+        throw new AppError("Vendor not found");
       }
     }
 
@@ -323,7 +329,7 @@ export async function createVendorPayment(input: {
         paidAt: input.paidAt,
         amount: roundMoney(input.amount),
         remainingBalance,
-        attachmentKey: input.attachmentKey ?? null,
+        attachmentKey: assertStoreAttachmentKey(input.storeId, input.attachmentKey),
         createdById: input.userId,
       },
       include: { vendor: { select: { id: true, name: true } } },

@@ -6,7 +6,8 @@ import { zDateTimeString } from "../lib/datetime.js";
 import { withAttachmentUrl } from "../lib/object-storage.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
-import { loadUserPermissions, requireAnyPermission } from "../middleware/permissions.js";
+import { requireAnyPermission } from "../middleware/permissions.js";
+import { errorResponse } from "../lib/errors.js";
 import { userHasPermission, type PermissionKey } from "../lib/permissions.js";
 import { prisma } from "../lib/prisma.js";
 import { voidOrder } from "../services/order-actions.js";
@@ -166,7 +167,7 @@ export const orderRoutes = new Hono<AppEnv>();
 
 orderRoutes.get("/reports/item-sales", requireAuth, async (c) => {
   const auth = c.get("auth");
-  const permissions = await loadUserPermissions(auth.storeId, auth.sub);
+  const permissions = c.get("permissions");
   if (!userHasPermission(permissions, "orders.items")) {
     return c.json({ error: "You do not have permission to view item sales" }, 403);
   }
@@ -195,7 +196,7 @@ orderRoutes.get("/reports/item-sales", requireAuth, async (c) => {
 
 orderRoutes.get("/", requireAuth, async (c) => {
   const auth = c.get("auth");
-  const permissions = await loadUserPermissions(auth.storeId, auth.sub);
+  const permissions = c.get("permissions");
   const canViewOrders = userHasPermission(permissions, "orders.view");
   const canOpenProjects = userHasPermission(permissions, "pos.projects");
 
@@ -238,8 +239,7 @@ orderRoutes.post("/:id/void", requireAuth, requireAnyPermission("orders.void"), 
     const order = await voidOrder(auth.storeId, c.req.param("id"), auth.sub);
     return c.json({ order: await presentOrder(order, c.req.url) });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not void order";
-    return c.json({ error: message }, 400);
+    return errorResponse(c, error, "Could not void order");
   }
 });
 
@@ -251,7 +251,7 @@ orderRoutes.get("/:id", requireAuth, async (c) => {
     return c.json({ error: "Order not found" }, 404);
   }
 
-  const permissions = await loadUserPermissions(auth.storeId, auth.sub);
+  const permissions = c.get("permissions");
   const canViewOrders = userHasPermission(permissions, "orders.view");
   const canOpenProjects = userHasPermission(permissions, "pos.projects");
 
@@ -303,9 +303,7 @@ orderRoutes.post("/project", requireAuth, requireAnyPermission("pos.projects"), 
 
     return c.json({ order: await presentOrder(order, c.req.url) }, 201);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Could not create project order";
-    return c.json({ error: message }, 400);
+    return errorResponse(c, error, "Could not create project order");
   }
 });
 
@@ -344,9 +342,7 @@ orderRoutes.patch("/:id/project", requireAuth, requireAnyPermission("pos.project
 
     return c.json({ order: await presentOrder(order, c.req.url) });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Could not update project order";
-    return c.json({ error: message }, 400);
+    return errorResponse(c, error, "Could not update project order");
   }
 });
 
@@ -373,9 +369,7 @@ orderRoutes.post("/:id/project/payments", requireAuth, requireAnyPermission("pos
 
     return c.json({ order: await presentOrder(order, c.req.url) }, 201);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Could not record partial payment";
-    return c.json({ error: message }, 400);
+    return errorResponse(c, error, "Could not record partial payment");
   }
 });
 
@@ -391,9 +385,7 @@ orderRoutes.post("/:id/project/submit", requireAuth, requireAnyPermission("pos.p
 
     return c.json({ order: await presentOrder(order, c.req.url) });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Could not submit project order";
-    return c.json({ error: message }, 400);
+    return errorResponse(c, error, "Could not submit project order");
   }
 });
 
@@ -406,7 +398,7 @@ orderRoutes.post("/", requireAuth, requireAnyPermission("pos.sales"), async (c) 
     return c.json({ error: "Invalid order payload", details: parsed.error.flatten() }, 400);
   }
 
-  const permissions = await loadUserPermissions(auth.storeId, auth.sub);
+  const permissions = c.get("permissions");
   const denied = await saleFeatureDenial(auth.storeId, permissions, parsed.data);
   if (denied) {
     return c.json({ error: denied }, 403);
@@ -425,7 +417,6 @@ orderRoutes.post("/", requireAuth, requireAnyPermission("pos.sales"), async (c) 
 
     return c.json({ order: await presentOrder(order, c.req.url) }, 201);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not create order";
-    return c.json({ error: message }, 400);
+    return errorResponse(c, error, "Could not create order");
   }
 });

@@ -1,5 +1,7 @@
 import { StockMovementType, type Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
+import { AppError } from "../lib/errors.js";
+import { recordAudit } from "../lib/audit.js";
 
 type AdjustStockInput = {
   storeId: string;
@@ -12,7 +14,7 @@ type AdjustStockInput = {
 
 export async function adjustStock(input: AdjustStockInput) {
   if (input.quantity === 0) {
-    throw new Error("Quantity cannot be zero");
+    throw new AppError("Quantity cannot be zero");
   }
 
   return prisma.$transaction(async (tx) => {
@@ -25,20 +27,33 @@ export async function adjustStock(input: AdjustStockInput) {
     });
 
     if (!product) {
-      throw new Error("Product not found");
+      throw new AppError("Product not found");
     }
 
-    const stockBefore = product.onStock;
-    const stockAfter = stockBefore + input.quantity;
-
-    if (stockAfter < 0) {
-      throw new Error("Stock cannot go below zero");
+    if (input.quantity < 0) {
+      const res = await tx.product.updateMany({
+        where: {
+          id: product.id,
+          storeId: input.storeId,
+          onStock: { gte: -input.quantity },
+        },
+        data: { onStock: { decrement: -input.quantity } },
+      });
+      if (res.count !== 1) {
+        throw new AppError("Stock cannot go below zero");
+      }
+    } else {
+      await tx.product.update({
+        where: { id: product.id },
+        data: { onStock: { increment: input.quantity } },
+      });
     }
 
-    await tx.product.update({
+    const { onStock: stockAfter } = await tx.product.findUniqueOrThrow({
       where: { id: product.id },
-      data: { onStock: stockAfter },
+      select: { onStock: true },
     });
+    const stockBefore = stockAfter - input.quantity;
 
     const movement = await tx.stockMovement.create({
       data: {
@@ -58,6 +73,15 @@ export async function adjustStock(input: AdjustStockInput) {
         product: { select: { id: true, name: true, sku: true } },
         user: { select: { id: true, name: true } },
       },
+    });
+
+    await recordAudit(tx, {
+      storeId: input.storeId,
+      actorId: input.userId,
+      action: "stock.adjust",
+      entityType: "product",
+      entityId: product.id,
+      details: { quantity: input.quantity, type: input.type },
     });
 
     return movement;

@@ -13,11 +13,10 @@ export function useHasPermission(permission: PermissionKey | PermissionKey[]) {
 }
 
 export function useCanManage() {
-  return (
-    useHasPermission("products.manage") ||
-    useHasPermission("inventory.manage") ||
-    useHasPermission("customers.manage")
-  );
+  const products = useHasPermission("products.manage");
+  const inventory = useHasPermission("inventory.manage");
+  const customers = useHasPermission("customers.manage");
+  return products || inventory || customers;
 }
 
 export function useIsAdmin() {

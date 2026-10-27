@@ -23,7 +23,7 @@ import type { PermissionDefinition, RolePoliciesMap } from "./permissions";
 
 const API_URL =
   import.meta.env.VITE_API_URL ??
-  "https://dapos-api-production.up.railway.app";
+  "https://dapos.up.railway.app";
 
 const TOKEN_KEY = "dapos_token";
 
@@ -37,6 +37,23 @@ export function setToken(token: string) {
 
 export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
+}
+
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+type UnauthorizedListener = () => void;
+let onUnauthorized: UnauthorizedListener | null = null;
+
+export function setUnauthorizedHandler(handler: UnauthorizedListener | null) {
+  onUnauthorized = handler;
 }
 
 async function request<T>(
@@ -64,6 +81,10 @@ async function request<T>(
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
+    if (response.status === 401 && !path.startsWith("/auth/login")) {
+      clearToken();
+      onUnauthorized?.();
+    }
     const message =
       typeof data.error === "string"
         ? data.error
@@ -83,7 +104,7 @@ async function request<T>(
           )
           .join("; ")
       : "";
-    throw new Error(fieldMessages ? `${message} (${fieldMessages})` : message);
+    throw new ApiError(fieldMessages ? `${message} (${fieldMessages})` : message, response.status);
   }
 
   return data as T;

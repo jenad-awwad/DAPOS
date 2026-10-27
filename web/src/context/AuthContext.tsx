@@ -8,11 +8,13 @@ import {
   type ReactNode,
 } from "react";
 import {
+  ApiError,
   clearToken,
   fetchMe,
   getToken,
   login as apiLogin,
   setToken,
+  setUnauthorizedHandler,
 } from "../lib/api";
 import type { Store, User } from "../lib/types";
 
@@ -43,15 +45,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const data = await fetchMe();
       setUser(data.user);
       setStore(data.store);
-    } catch {
-      clearToken();
-      setUser(null);
-      setStore(null);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        clearToken();
+        setUser(null);
+        setStore(null);
+      }
     }
   }, []);
 
   useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setUser(null);
+      setStore(null);
+    });
     refreshSession().finally(() => setLoading(false));
+    return () => setUnauthorizedHandler(null);
   }, [refreshSession]);
 
   const signIn = useCallback(async (phone: string, pin: string) => {

@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useAuth } from "../context/AuthContext";
 import { useModulesMenu } from "../context/ModulesMenuContext";
-import { colors, roleLabel } from "../lib/theme";
+import { colors, radii, roleLabel } from "../lib/theme";
 
 type Props = {
   showMenu?: boolean;
@@ -100,7 +100,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.greenSoft,
     paddingHorizontal: 8,
     paddingVertical: 2,
-    borderRadius: colors.pill,
+    borderRadius: radii.pill,
   },
   onlineDot: {
     width: 6,

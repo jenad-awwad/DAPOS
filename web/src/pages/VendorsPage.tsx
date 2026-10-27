@@ -53,9 +53,6 @@ export function VendorsPage() {
   const canManage = userCanAccess(user, "vendors.manage");
 
   const hasAccess = canViewBalances || canRecord;
-  if (!hasAccess) {
-    return <Navigate to="/" replace />;
-  }
 
   const vendorOptionsQuery = useQuery({
     queryKey: ["vendors", "options"],
@@ -203,6 +200,10 @@ export function VendorsPage() {
   });
 
   const currency = store?.currency ?? "USD";
+
+  if (!hasAccess) {
+    return <Navigate to="/" replace />;
+  }
 
   return (
     <Stack gap="lg">

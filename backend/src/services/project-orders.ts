@@ -1,3 +1,4 @@
+import { AppError } from "../lib/errors.js";
 import {
   CalendarEventStatus,
   CalendarEventType,
@@ -9,6 +10,8 @@ import {
 } from "@prisma/client";
 import { assertStoreAttachmentKey } from "../lib/object-storage.js";
 import { prisma } from "../lib/prisma.js";
+import { requireStoreCustomer } from "../lib/tenant.js";
+import { nextOrderNumber } from "./order-numbers.js";
 import { syncProjectOrderVendorInvoices } from "./vendors.js";
 
 type ProjectMaterialInput = {
@@ -86,7 +89,7 @@ const projectInclude = {
   },
   payments: true,
   calendarEvents: true,
-  cashier: { select: { id: true, name: true, phone: true } },
+  cashier: { select: { id: true, name: true } },
   customer: true,
 };
 
@@ -94,28 +97,19 @@ function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-async function nextOrderNumber(
-  tx: Prisma.TransactionClient,
-  storeId: string,
-): Promise<string> {
-  const count = await tx.order.count({ where: { storeId } });
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  return `ORD-${date}-${String(count + 1).padStart(4, "0")}`;
-}
-
 function buildMaterialLines(materials: ProjectMaterialInput[] = []) {
   return materials.map((material) => {
     if (!material.description.trim()) {
-      throw new Error("Material description is required");
+      throw new AppError("Material description is required");
     }
     if (!material.vendor.trim()) {
-      throw new Error("Vendor is required for each material");
+      throw new AppError("Vendor is required for each material");
     }
     if (material.quantity <= 0) {
-      throw new Error("Material quantity must be greater than zero");
+      throw new AppError("Material quantity must be greater than zero");
     }
     if (material.unitCost < 0) {
-      throw new Error("Material unit cost cannot be negative");
+      throw new AppError("Material unit cost cannot be negative");
     }
 
     const lineTotal = roundMoney(material.quantity * material.unitCost);
@@ -137,10 +131,10 @@ function computeTotals(
   discountTotal = 0,
 ) {
   if (sellQuantity <= 0) {
-    throw new Error("Sell quantity must be greater than zero");
+    throw new AppError("Sell quantity must be greater than zero");
   }
   if (sellUnitPrice < 0) {
-    throw new Error("Sell unit price cannot be negative");
+    throw new AppError("Sell unit price cannot be negative");
   }
 
   const materialCostTotal = roundMoney(
@@ -165,7 +159,10 @@ async function resolveCustomerId(
   customerName?: string,
   customerPhone?: string,
 ): Promise<string | undefined> {
-  if (customerId) return customerId;
+  if (customerId) {
+    const customer = await requireStoreCustomer(tx, storeId, customerId);
+    return customer.id;
+  }
 
   if (customerName?.trim() && customerPhone?.trim()) {
     const existing = await tx.customer.findFirst({
@@ -236,7 +233,7 @@ async function syncCalendarEvent(
 
 export async function createOpenProject(input: CreateOpenProjectInput) {
   if (!input.projectTitle.trim()) {
-    throw new Error("Project title is required");
+    throw new AppError("Project title is required");
   }
 
   const materialLines = buildMaterialLines(input.materials ?? []);
@@ -253,7 +250,7 @@ export async function createOpenProject(input: CreateOpenProjectInput) {
         where: { id: input.storeId, isActive: true },
       });
       if (!store) {
-        throw new Error("Store not found");
+        throw new AppError("Store not found");
       }
 
       const customerId = await resolveCustomerId(
@@ -295,7 +292,7 @@ export async function createOpenProject(input: CreateOpenProjectInput) {
       });
 
       const customer = customerId
-        ? await tx.customer.findFirst({ where: { id: customerId } })
+        ? await tx.customer.findFirst({ where: { id: customerId, storeId: input.storeId } })
         : null;
 
       await syncCalendarEvent(tx, {
@@ -345,7 +342,7 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
       });
 
       if (!order) {
-        throw new Error("Open project not found");
+        throw new AppError("Open project not found");
       }
 
       const adjustments: string[] = [];
@@ -473,7 +470,7 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
       }
 
       const scheduledCustomer = customerId
-        ? await tx.customer.findFirst({ where: { id: customerId } })
+        ? await tx.customer.findFirst({ where: { id: customerId, storeId: input.storeId } })
         : order.customer;
 
       await syncCalendarEvent(tx, {
@@ -517,7 +514,7 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
 
 export async function recordProjectPayment(input: RecordProjectPaymentInput) {
   if (input.amount <= 0) {
-    throw new Error("Payment amount must be greater than zero");
+    throw new AppError("Payment amount must be greater than zero");
   }
 
   return prisma.$transaction(
@@ -533,7 +530,7 @@ export async function recordProjectPayment(input: RecordProjectPaymentInput) {
       });
 
       if (!order) {
-        throw new Error("Open project not found");
+        throw new AppError("Open project not found");
       }
 
       const totalDue = order.total.toNumber();
@@ -541,12 +538,12 @@ export async function recordProjectPayment(input: RecordProjectPaymentInput) {
       const balanceDue = roundMoney(totalDue - alreadyPaid);
 
       if (balanceDue <= 0) {
-        throw new Error("This project is already fully paid");
+        throw new AppError("This project is already fully paid");
       }
 
       const amount = roundMoney(input.amount);
       if (amount > balanceDue) {
-        throw new Error(`Payment cannot exceed outstanding balance (${balanceDue})`);
+        throw new AppError(`Payment cannot exceed outstanding balance (${balanceDue})`);
       }
 
       const now = new Date();
@@ -592,25 +589,33 @@ export async function submitOpenProject(input: SubmitProjectInput) {
       });
 
       if (!order) {
-        throw new Error("Open project not found");
+        throw new AppError("Open project not found");
       }
 
       const totalDue = roundMoney(order.total.toNumber());
       const paidTotal = paidTotalFromPayments(order.payments);
 
       if (paidTotal !== totalDue) {
-        throw new Error(
+        throw new AppError(
           `Payments (${paidTotal}) must equal the customer price (${totalDue}) before this project can be closed.`,
         );
       }
 
       const now = new Date();
+      let pointsEarned = 0;
+      if (order.customerId) {
+        const enrolled = await tx.customer.findFirst({
+          where: { id: order.customerId, storeId: input.storeId, loyaltyEnrolled: true },
+        });
+        if (enrolled) pointsEarned = Math.floor(paidTotal);
+      }
 
       const updated = await tx.order.update({
         where: { id: order.id },
         data: {
           status: OrderStatus.COMPLETED,
           completedAt: now,
+          loyaltyPointsEarned: pointsEarned,
         },
         include: projectInclude,
       });
@@ -632,10 +637,10 @@ export async function submitOpenProject(input: SubmitProjectInput) {
         const customer = await tx.customer.findFirst({
           where: { id: order.customerId, storeId: input.storeId },
         });
-        if (customer?.loyaltyEnrolled) {
+        if (customer?.loyaltyEnrolled && pointsEarned > 0) {
           await tx.customer.update({
             where: { id: customer.id },
-            data: { loyaltyPoints: { increment: Math.floor(paidTotal) } },
+            data: { loyaltyPoints: { increment: pointsEarned } },
           });
         }
       }

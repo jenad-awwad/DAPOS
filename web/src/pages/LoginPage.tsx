@@ -24,10 +24,10 @@ export function LoginPage() {
   const [loading, setLoading] = useState(false);
 
   const form = useForm({
-    initialValues: { phone: "0501234567", pin: "1234" },
+    initialValues: { phone: "", pin: "" },
     validate: {
       phone: (v) => (v.trim().length >= 7 ? null : "Enter a valid phone number"),
-      pin: (v) => (v.length >= 4 ? null : "PIN must be at least 4 digits"),
+      pin: (v) => (/^\d{4,6}$/.test(v) ? null : "PIN must be 4 to 6 digits"),
     },
   });
 
@@ -74,7 +74,15 @@ export function LoginPage() {
               <PasswordInput
                 label="PIN"
                 placeholder="••••"
+                inputMode="numeric"
+                maxLength={6}
                 {...form.getInputProps("pin")}
+                onChange={(event) =>
+                  form.setFieldValue(
+                    "pin",
+                    event.currentTarget.value.replace(/\D/g, "").slice(0, 6),
+                  )
+                }
               />
               {error ? (
                 <Alert color="red" variant="light">

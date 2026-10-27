@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { z } from "zod";
+import { errorResponse } from "../lib/errors.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
 import { requireAnyPermission } from "../middleware/permissions.js";
@@ -12,16 +13,30 @@ const adjustSchema = z.object({
   reason: z.string().max(500).optional(),
 });
 
+const listQuerySchema = z.object({
+  productId: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+});
+
 export const stockMovementRoutes = new Hono<AppEnv>();
 
-stockMovementRoutes.get("/", requireAuth, async (c) => {
+stockMovementRoutes.get(
+  "/",
+  requireAuth,
+  requireAnyPermission("stock.view", "stock.adjust"),
+  async (c) => {
   const { storeId } = c.get("auth");
-  const productId = c.req.query("productId");
-  const limit = Number(c.req.query("limit") ?? "100");
+  const parsed = listQuerySchema.safeParse({
+    productId: c.req.query("productId") || undefined,
+    limit: c.req.query("limit") ?? undefined,
+  });
+  if (!parsed.success) {
+    return c.json({ error: "Invalid stock history filters", details: parsed.error.flatten() }, 400);
+  }
 
   const movements = await listStockMovements(storeId, {
-    productId: productId || undefined,
-    limit: Number.isFinite(limit) ? limit : 100,
+    productId: parsed.data.productId,
+    limit: parsed.data.limit,
   });
 
   return c.json({ movements: serialize(movements) });
@@ -51,7 +66,6 @@ stockMovementRoutes.post(
     });
     return c.json({ movement: serialize(movement) }, 201);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not adjust stock";
-    return c.json({ error: message }, 400);
+    return errorResponse(c, error, "Could not adjust stock");
   }
 });

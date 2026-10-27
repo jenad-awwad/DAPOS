@@ -28,12 +28,9 @@ export async function loadUserPermissions(
 
 export function requireAnyPermission(...required: PermissionKey[]) {
   return createMiddleware<AppEnv>(async (c, next) => {
-    const auth = c.get("auth");
-    const permissions = await loadUserPermissions(auth.storeId, auth.sub);
+    const permissions = c.get("permissions") ?? [];
 
-    const allowed = required.some((key) =>
-      userHasPermission(permissions, key),
-    );
+    const allowed = required.some((key) => userHasPermission(permissions, key));
 
     if (!allowed) {
       return c.json({ error: "Forbidden" }, 403);

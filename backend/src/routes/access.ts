@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { serialize } from "../lib/serialize.js";
 import {
@@ -10,6 +10,9 @@ import {
   type RolePoliciesMap,
 } from "../lib/permissions.js";
 import { prisma } from "../lib/prisma.js";
+import { AppError, errorResponse } from "../lib/errors.js";
+import { assertCanGrant } from "../lib/grant-guard.js";
+import { recordAudit } from "../lib/audit.js";
 import {
   createStoreRole,
   deleteStoreRole,
@@ -40,6 +43,31 @@ const updateRoleSchema = z.object({
   permissions: z.array(permissionSchema).optional(),
 });
 
+async function guardRoleEdit(
+  c: Context<AppEnv>,
+  storeId: string,
+  roleId: string,
+  nextPermissions?: PermissionKey[],
+) {
+  const editorRole = c.get("role");
+  const role = await prisma.storeRole.findFirst({ where: { id: roleId, storeId } });
+  if (!role) throw new AppError("Role not found", 404);
+  if (editorRole === "ADMIN") return role;
+  if (role.systemCode === "ADMIN") {
+    throw new AppError("You can't edit the admin role", 403);
+  }
+  if (role.id === c.get("storeRoleId")) {
+    throw new AppError("You can't edit your own role", 403);
+  }
+  if (nextPermissions) {
+    assertCanGrant(
+      { role: editorRole, permissions: c.get("permissions") },
+      { permissions: nextPermissions },
+    );
+  }
+  return role;
+}
+
 export const accessRoutes = new Hono<AppEnv>();
 
 accessRoutes.use("*", requireAuth, requireAnyPermission("roles.manage"));
@@ -64,13 +92,16 @@ accessRoutes.post("/roles", async (c) => {
   }
 
   try {
-    const role = await createStoreRole(auth.storeId, parsed.data);
+    if (c.get("role") !== "ADMIN") {
+      assertCanGrant(
+        { role: c.get("role"), permissions: c.get("permissions") },
+        { permissions: parsed.data.permissions },
+      );
+    }
+    const role = await createStoreRole(auth.storeId, parsed.data, auth.sub);
     return c.json({ role: serialize(role) }, 201);
   } catch (error) {
-    return c.json(
-      { error: error instanceof Error ? error.message : "Could not create role" },
-      400,
-    );
+    return errorResponse(c, error, "Could not create role");
   }
 });
 
@@ -85,13 +116,11 @@ accessRoutes.patch("/roles/:id", async (c) => {
   }
 
   try {
-    const role = await updateStoreRole(auth.storeId, roleId, parsed.data);
+    await guardRoleEdit(c, auth.storeId, roleId, parsed.data.permissions);
+    const role = await updateStoreRole(auth.storeId, roleId, parsed.data, auth.sub);
     return c.json({ role: serialize(role) });
   } catch (error) {
-    return c.json(
-      { error: error instanceof Error ? error.message : "Could not update role" },
-      400,
-    );
+    return errorResponse(c, error, "Could not update role");
   }
 });
 
@@ -100,13 +129,11 @@ accessRoutes.delete("/roles/:id", async (c) => {
   const roleId = c.req.param("id");
 
   try {
-    await deleteStoreRole(auth.storeId, roleId);
+    await guardRoleEdit(c, auth.storeId, roleId);
+    await deleteStoreRole(auth.storeId, roleId, auth.sub);
     return c.json({ ok: true });
   } catch (error) {
-    return c.json(
-      { error: error instanceof Error ? error.message : "Could not delete role" },
-      400,
-    );
+    return errorResponse(c, error, "Could not delete role");
   }
 });
 
@@ -140,9 +167,42 @@ accessRoutes.patch("/role-policies", async (c) => {
 
   const policies: RolePoliciesMap = parsed.data;
 
-  await prisma.store.update({
-    where: { id: auth.storeId },
-    data: { rolePolicies: policies },
+  if (c.get("role") !== "ADMIN") {
+    const editorRoleId = c.get("storeRoleId");
+    const roles = await ensureStoreRoles(auth.storeId);
+    const sameList = (left: PermissionKey[], right: PermissionKey[]) =>
+      left.length === right.length && left.every((key) => right.includes(key));
+    for (const systemCode of ["ADMIN", "MANAGER", "CASHIER"] as const) {
+      const permissions = policies[systemCode];
+      const role = roles.find((item) => item.systemCode === systemCode);
+      const unchanged = role ? sameList(role.permissions, permissions) : false;
+      if (systemCode === "ADMIN" && !unchanged) {
+        return c.json({ error: "You can't edit the admin role" }, 403);
+      }
+      if (role && role.id === editorRoleId && !unchanged) {
+        return c.json({ error: "You can't edit your own role" }, 403);
+      }
+      if (!unchanged) {
+        assertCanGrant(
+          { role: c.get("role"), permissions: c.get("permissions") },
+          { permissions },
+        );
+      }
+    }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.store.update({
+      where: { id: auth.storeId },
+      data: { rolePolicies: policies },
+    });
+    await recordAudit(tx, {
+      storeId: auth.storeId,
+      actorId: auth.sub,
+      action: "role_policies.update",
+      entityType: "store",
+      entityId: auth.storeId,
+    });
   });
 
   const roles = await ensureStoreRoles(auth.storeId);
@@ -151,7 +211,7 @@ accessRoutes.patch("/role-policies", async (c) => {
     if (!role.systemCode) continue;
     const permissions = policies[role.systemCode];
     if (!permissions) continue;
-    await updateStoreRole(auth.storeId, role.id, { permissions });
+    await updateStoreRole(auth.storeId, role.id, { permissions }, auth.sub);
   }
 
   const updatedRoles = await listStoreRoles(auth.storeId);

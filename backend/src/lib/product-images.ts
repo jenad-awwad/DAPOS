@@ -1,3 +1,4 @@
+import { AppError } from "./errors.js";
 import {
   apiPublicOrigin,
   isSafeAttachmentKey,
@@ -37,10 +38,10 @@ export async function persistProductImage(
 
   const image = parseImageDataUrl(imageUrl);
   if (!image) {
-    throw new Error("Product photo must be a valid image");
+    throw new AppError("Product photo must be a valid image");
   }
   if (image.buffer.length > MAX_PRODUCT_IMAGE_BYTES) {
-    throw new Error("Product photo must be 5 MB or smaller");
+    throw new AppError("Product photo must be 5 MB or smaller");
   }
 
   const key = await uploadProductImage(image.buffer, image.contentType, storeId);

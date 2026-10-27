@@ -1,4 +1,6 @@
+import { AppError } from "../lib/errors.js";
 import { Prisma, type UserRole } from "@prisma/client";
+import { recordAudit } from "../lib/audit.js";
 import { prisma } from "../lib/prisma.js";
 import {
   DEFAULT_ROLE_POLICIES,
@@ -63,7 +65,7 @@ export async function ensureStoreRoles(storeId: string): Promise<StoreRoleRecord
   });
 
   if (!store) {
-    throw new Error("Store not found");
+    throw new AppError("Store not found");
   }
 
   const policies = sanitizeRolePolicies(store.rolePolicies);
@@ -97,26 +99,6 @@ export async function ensureStoreRoles(storeId: string): Promise<StoreRoleRecord
     orderBy: [{ isSystem: "desc" }, { name: "asc" }],
   });
 
-  for (const role of roles) {
-    if (!role.systemCode) continue;
-    const stored = readStoredPermissions(role.permissions);
-    if (stored?.configured || stored?.revision) continue;
-    const current = stored?.keys ?? DEFAULT_ROLE_POLICIES[role.systemCode];
-    const next = withVendorPermissionDefaults(role.systemCode, current);
-    if (next.length === current.length && next.every((key) => current.includes(key))) {
-      continue;
-    }
-    await prisma.storeRole.update({
-      where: { id: role.id },
-      data: { permissions: next },
-    });
-  }
-
-  roles = await prisma.storeRole.findMany({
-    where: { storeId },
-    orderBy: [{ isSystem: "desc" }, { name: "asc" }],
-  });
-
   const roleBySystemCode = new Map(
     roles
       .filter((role) => role.systemCode)
@@ -140,6 +122,28 @@ export async function ensureStoreRoles(storeId: string): Promise<StoreRoleRecord
   return roles.map(serializeStoreRole);
 }
 
+/** One-time repair previously run on every login. Call from startup, not from /auth. */
+export async function repairVendorPermissionDefaults() {
+  const roles = await prisma.storeRole.findMany({
+    where: { systemCode: { not: null } },
+  });
+
+  for (const role of roles) {
+    if (!role.systemCode) continue;
+    const stored = readStoredPermissions(role.permissions);
+    if (stored?.configured || stored?.revision) continue;
+    const current = stored?.keys ?? DEFAULT_ROLE_POLICIES[role.systemCode];
+    const next = withVendorPermissionDefaults(role.systemCode, current);
+    if (next.length === current.length && next.every((key) => current.includes(key))) {
+      continue;
+    }
+    await prisma.storeRole.update({
+      where: { id: role.id },
+      data: { permissions: next },
+    });
+  }
+}
+
 export async function listStoreRoles(storeId: string): Promise<StoreRoleRecord[]> {
   const roles = await ensureStoreRoles(storeId);
   return roles;
@@ -148,26 +152,38 @@ export async function listStoreRoles(storeId: string): Promise<StoreRoleRecord[]
 export async function createStoreRole(
   storeId: string,
   input: { name: string; permissions: PermissionKey[] },
+  actorId?: string,
 ): Promise<StoreRoleRecord> {
   const name = input.name.trim();
   if (!name) {
-    throw new Error("Role name is required");
+    throw new AppError("Role name is required");
   }
 
   const existing = await prisma.storeRole.findFirst({
     where: { storeId, name: { equals: name, mode: "insensitive" } },
   });
   if (existing) {
-    throw new Error("A role with this name already exists");
+    throw new AppError("A role with this name already exists");
   }
 
-  const role = await prisma.storeRole.create({
-    data: {
+  const role = await prisma.$transaction(async (tx) => {
+    const created = await tx.storeRole.create({
+      data: {
+        storeId,
+        name,
+        isSystem: false,
+        permissions: stampPermissionList(input.permissions),
+      },
+    });
+    await recordAudit(tx, {
       storeId,
-      name,
-      isSystem: false,
-      permissions: stampPermissionList(input.permissions),
-    },
+      actorId,
+      action: "role.create",
+      entityType: "storeRole",
+      entityId: created.id,
+      details: { name: created.name },
+    });
+    return created;
   });
 
   return serializeStoreRole(role);
@@ -177,19 +193,20 @@ export async function updateStoreRole(
   storeId: string,
   roleId: string,
   input: { name?: string; permissions?: PermissionKey[] },
+  actorId?: string,
 ): Promise<StoreRoleRecord> {
   const existing = await prisma.storeRole.findFirst({
     where: { id: roleId, storeId },
   });
 
   if (!existing) {
-    throw new Error("Role not found");
+    throw new AppError("Role not found");
   }
 
   if (input.name !== undefined) {
     const name = input.name.trim();
     if (!name) {
-      throw new Error("Role name is required");
+      throw new AppError("Role name is required");
     }
 
     const conflict = await prisma.storeRole.findFirst({
@@ -200,72 +217,102 @@ export async function updateStoreRole(
       },
     });
     if (conflict) {
-      throw new Error("A role with this name already exists");
+      throw new AppError("A role with this name already exists");
     }
   }
 
-  const role = await prisma.storeRole.update({
-    where: { id: roleId },
-    data: {
-      ...(input.name !== undefined ? { name: input.name.trim() } : {}),
-      ...(input.permissions !== undefined
-        ? {
-            permissions: stampPermissionList(
-              existing.systemCode === "ADMIN"
-                ? [...new Set([...input.permissions, "roles.manage" as const])]
-                : input.permissions,
-            ),
-          }
-        : {}),
-    },
-  });
-
-  if (existing.isSystem && existing.systemCode && input.permissions !== undefined) {
-    const saved =
-      existing.systemCode === "ADMIN"
-        ? [...new Set<PermissionKey>([...input.permissions, "roles.manage"])]
-        : input.permissions;
-    const currentPolicies = (
-      await prisma.store.findUnique({
-        where: { id: storeId },
-        select: { rolePolicies: true },
-      })
-    )?.rolePolicies;
-    const record =
-      currentPolicies &&
-      typeof currentPolicies === "object" &&
-      !Array.isArray(currentPolicies)
-        ? { ...(currentPolicies as Record<string, unknown>) }
-        : { ...sanitizeRolePolicies(null) };
-    record[existing.systemCode] = stampPermissionList(saved);
-    await prisma.store.update({
-      where: { id: storeId },
-      data: { rolePolicies: record as Prisma.InputJsonValue },
+  const role = await prisma.$transaction(async (tx) => {
+    const updated = await tx.storeRole.update({
+      where: { id: roleId },
+      data: {
+        ...(input.name !== undefined ? { name: input.name.trim() } : {}),
+        ...(input.permissions !== undefined
+          ? {
+              permissions: stampPermissionList(
+                existing.systemCode === "ADMIN"
+                  ? [...new Set([...input.permissions, "roles.manage" as const])]
+                  : input.permissions,
+              ),
+            }
+          : {}),
+      },
     });
-  }
+
+    if (existing.isSystem && existing.systemCode && input.permissions !== undefined) {
+      const saved =
+        existing.systemCode === "ADMIN"
+          ? [...new Set<PermissionKey>([...input.permissions, "roles.manage"])]
+          : input.permissions;
+      const currentPolicies = (
+        await tx.store.findUnique({
+          where: { id: storeId },
+          select: { rolePolicies: true },
+        })
+      )?.rolePolicies;
+      const record =
+        currentPolicies &&
+        typeof currentPolicies === "object" &&
+        !Array.isArray(currentPolicies)
+          ? { ...(currentPolicies as Record<string, unknown>) }
+          : { ...sanitizeRolePolicies(null) };
+      record[existing.systemCode] = stampPermissionList(saved);
+      await tx.store.update({
+        where: { id: storeId },
+        data: { rolePolicies: record as Prisma.InputJsonValue },
+      });
+    }
+
+    await recordAudit(tx, {
+      storeId,
+      actorId,
+      action: "role.update",
+      entityType: "storeRole",
+      entityId: updated.id,
+      details: {
+        name: input.name,
+        permissionsChanged: input.permissions !== undefined,
+      },
+    });
+
+    return updated;
+  });
 
   return serializeStoreRole(role);
 }
 
-export async function deleteStoreRole(storeId: string, roleId: string): Promise<void> {
+export async function deleteStoreRole(
+  storeId: string,
+  roleId: string,
+  actorId?: string,
+): Promise<void> {
   const role = await prisma.storeRole.findFirst({
     where: { id: roleId, storeId },
     include: { _count: { select: { users: true } } },
   });
 
   if (!role) {
-    throw new Error("Role not found");
+    throw new AppError("Role not found");
   }
 
   if (role.isSystem) {
-    throw new Error("System roles cannot be deleted");
+    throw new AppError("System roles cannot be deleted");
   }
 
   if (role._count.users > 0) {
-    throw new Error("Cannot delete a role that is assigned to users");
+    throw new AppError("Cannot delete a role that is assigned to users");
   }
 
-  await prisma.storeRole.delete({ where: { id: roleId } });
+  await prisma.$transaction(async (tx) => {
+    await tx.storeRole.delete({ where: { id: roleId } });
+    await recordAudit(tx, {
+      storeId,
+      actorId,
+      action: "role.delete",
+      entityType: "storeRole",
+      entityId: roleId,
+      details: { name: role.name },
+    });
+  });
 }
 
 export async function getStoreRoleById(storeId: string, roleId: string) {

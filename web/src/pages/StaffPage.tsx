@@ -5,6 +5,7 @@ import {
   Group,
   Loader,
   Modal,
+  PasswordInput,
   Select,
   Stack,
   Switch,
@@ -69,6 +70,12 @@ export function StaffPage() {
 
   const saveMutation = useMutation({
     mutationFn: async (values: typeof form.values) => {
+      if (values.pin && !/^\d{6}$/.test(values.pin)) {
+        throw new Error("PIN must be 6 digits");
+      }
+      if (!editing && !/^\d{6}$/.test(values.pin)) {
+        throw new Error("PIN must be 6 digits");
+      }
       if (editing) {
         return updateStaff(editing.id, {
           name: values.name,
@@ -177,10 +184,18 @@ export function StaffPage() {
           <Stack gap="sm">
             <TextInput label="Name" required {...form.getInputProps("name")} />
             <TextInput label="Phone" required {...form.getInputProps("phone")} />
-            <TextInput
+            <PasswordInput
               label={editing ? "New PIN (leave blank to keep)" : "PIN"}
               required={!editing}
+              inputMode="numeric"
+              maxLength={6}
               {...form.getInputProps("pin")}
+              onChange={(event) =>
+                form.setFieldValue(
+                  "pin",
+                  event.currentTarget.value.replace(/\D/g, "").slice(0, 6),
+                )
+              }
             />
             <Select
               label="Role"

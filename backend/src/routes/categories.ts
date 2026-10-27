@@ -1,3 +1,4 @@
+import { errorResponse } from "../lib/errors.js";
 import { Hono } from "hono";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
@@ -63,8 +64,8 @@ categoryRoutes.post("/", requireAuth, requireAnyPermission("categories.manage"),
       },
     });
     return c.json({ category: serialize(category) }, 201);
-  } catch {
-    return c.json({ error: "Category name already exists" }, 400);
+  } catch (error) {
+    return errorResponse(c, error, "Category name already exists");
   }
 });
 
@@ -95,8 +96,8 @@ categoryRoutes.patch("/:id", requireAuth, requireAnyPermission("categories.manag
       },
     });
     return c.json({ category: serialize(category) });
-  } catch {
-    return c.json({ error: "Category name already exists" }, 400);
+  } catch (error) {
+    return errorResponse(c, error, "Category name already exists");
   }
 });
 

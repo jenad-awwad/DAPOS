@@ -7,7 +7,13 @@ import '../services/token_storage.dart';
 class AuthState extends ChangeNotifier {
   AuthState({ApiClient? api, TokenStorage? tokens})
       : _api = api ?? ApiClient(),
-        _tokens = tokens ?? TokenStorage();
+        _tokens = tokens ?? TokenStorage() {
+    _api.onUnauthorized = () {
+      user = null;
+      store = null;
+      notifyListeners();
+    };
+  }
 
   final ApiClient _api;
   final TokenStorage _tokens;
@@ -34,10 +40,14 @@ class AuthState extends ChangeNotifier {
       final session = await _api.me();
       user = session.user;
       store = session.store;
+    } on ApiException catch (error) {
+      if (error.statusCode == 401) {
+        await _tokens.clear();
+        user = null;
+        store = null;
+      }
     } catch (_) {
-      await _tokens.clear();
-      user = null;
-      store = null;
+      // A network failure must not drop a saved login.
     }
     loading = false;
     notifyListeners();

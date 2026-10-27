@@ -2,6 +2,7 @@ import { OrderStatus, OrderType } from "@prisma/client";
 import { Hono } from "hono";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
+import { errorResponse } from "../lib/errors.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
 import { requireAnyPermission } from "../middleware/permissions.js";
@@ -118,9 +119,8 @@ vendorRoutes.post(
     try {
       const vendor = await createVendor(storeId, parsed.data);
       return c.json({ vendor: serialize(vendor) }, 201);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Could not create vendor";
-      return c.json({ error: message }, 400);
+    } catch (error) {
+      return errorResponse(c, error, "Could not create vendor");
     }
   },
 );
@@ -154,9 +154,8 @@ vendorRoutes.post(
         attachmentKey: parsed.data.attachmentKey,
       });
       return c.json({ invoice: serialize(invoice) }, 201);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Could not create invoice";
-      return c.json({ error: message }, 400);
+    } catch (error) {
+      return errorResponse(c, error, "Could not create invoice");
     }
   },
 );
@@ -219,9 +218,8 @@ vendorRoutes.post(
         attachmentKey: parsed.data.attachmentKey,
       });
       return c.json({ payment: serialize(payment) }, 201);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Could not create payment";
-      return c.json({ error: message }, 400);
+    } catch (error) {
+      return errorResponse(c, error, "Could not create payment");
     }
   },
 );

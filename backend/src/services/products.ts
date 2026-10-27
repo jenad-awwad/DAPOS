@@ -1,6 +1,8 @@
-import type { Prisma } from "@prisma/client";
+import { AppError } from "../lib/errors.js";
+import { Prisma } from "@prisma/client";
 import { resolveUserPermissions } from "../lib/permissions.js";
 import { prisma } from "../lib/prisma.js";
+import { recordAudit } from "../lib/audit.js";
 
 type DbClient = Prisma.TransactionClient | typeof prisma;
 
@@ -66,7 +68,7 @@ export async function createBasicProduct(storeId: string, input: CreateBasicProd
       where: { storeId, barcode: trimmedBarcode },
     });
     if (barcodeTaken) {
-      throw new Error("Barcode already exists");
+      throw new AppError("Barcode already exists");
     }
 
     const created = await prisma.product.create({
@@ -124,13 +126,15 @@ export async function createBasicProduct(storeId: string, input: CreateBasicProd
         });
         return created;
       } catch (error) {
-        const message = error instanceof Error ? error.message : "";
-        if (!message.includes("Unique constraint")) {
+        if (
+          !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+          error.code !== "P2002"
+        ) {
           throw error;
         }
       }
     }
-    throw new Error("Could not generate a unique barcode");
+    throw new AppError("Could not generate a unique barcode");
   });
 }
 
@@ -145,12 +149,12 @@ export async function setProductPricing(
     where: { id: productId, storeId },
   });
   if (!existing) {
-    throw new Error("Product not found");
+    throw new AppError("Product not found");
   }
 
   const completedAt = new Date();
-  const [product] = await prisma.$transaction([
-    prisma.product.update({
+  return prisma.$transaction(async (tx) => {
+    const product = await tx.product.update({
       where: { id: existing.id },
       data: {
         price,
@@ -158,18 +162,30 @@ export async function setProductPricing(
         isPriced: true,
       },
       include: { category: true, vendor: { select: { id: true, name: true } } },
-    }),
-    prisma.productPricingRequest.updateMany({
+    });
+    await tx.productPricingRequest.updateMany({
       where: { storeId, productId: existing.id, status: "PENDING" },
       data: {
         status: "COMPLETED",
         completedAt,
         completedById,
       },
-    }),
-  ]);
-
-  return product;
+    });
+    await recordAudit(tx, {
+      storeId,
+      actorId: completedById,
+      action: "product.price_change",
+      entityType: "product",
+      entityId: existing.id,
+      details: {
+        price,
+        cost,
+        previousPrice: existing.price.toNumber(),
+        previousCost: existing.cost?.toNumber() ?? null,
+      },
+    });
+    return product;
+  });
 }
 
 const pricingRequestInclude = {
@@ -222,7 +238,7 @@ export async function assignPricingRequest(
     where: { id: requestId, storeId, status: "PENDING" },
   });
   if (!existing) {
-    throw new Error("Open pricing request not found");
+    throw new AppError("Open pricing request not found");
   }
 
   if (assignedToId) {
@@ -230,7 +246,7 @@ export async function assignPricingRequest(
       where: { id: assignedToId, storeId, isActive: true },
     });
     if (!assignee) {
-      throw new Error("Assigned user not found");
+      throw new AppError("Assigned user not found");
     }
   }
 

@@ -7,6 +7,9 @@ import {
   type Prisma,
 } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
+import { AppError } from "../lib/errors.js";
+import { requireStoreCustomer } from "../lib/tenant.js";
+import { nextOrderNumber } from "./order-numbers.js";
 
 type OrderItemInput = {
   productId: string;
@@ -29,18 +32,9 @@ function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-async function nextOrderNumber(
-  tx: Prisma.TransactionClient,
-  storeId: string,
-): Promise<string> {
-  const count = await tx.order.count({ where: { storeId } });
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
-  return `ORD-${date}-${String(count + 1).padStart(4, "0")}`;
-}
-
 export async function createSale(input: CreateOrderInput) {
   if (input.items.length === 0) {
-    throw new Error("Order must include at least one item");
+    throw new AppError("Order must include at least one item");
   }
 
   return prisma.$transaction(
@@ -49,7 +43,7 @@ export async function createSale(input: CreateOrderInput) {
       where: { id: input.storeId, isActive: true },
     });
     if (!store) {
-      throw new Error("Store not found");
+      throw new AppError("Store not found");
     }
 
     const productIds = input.items.map((item) => item.productId);
@@ -62,7 +56,7 @@ export async function createSale(input: CreateOrderInput) {
     });
 
     if (products.length !== productIds.length) {
-      throw new Error("One or more products were not found");
+      throw new AppError("One or more products were not found");
     }
 
     const productMap = new Map(products.map((p) => [p.id, p]));
@@ -80,16 +74,16 @@ export async function createSale(input: CreateOrderInput) {
     for (const item of input.items) {
       const product = productMap.get(item.productId);
       if (!product) {
-        throw new Error("Product not found");
+        throw new AppError("Product not found");
       }
       if (item.quantity <= 0) {
-        throw new Error("Quantity must be greater than zero");
+        throw new AppError("Quantity must be greater than zero");
       }
       if (product.onStock < item.quantity) {
-        throw new Error(`Insufficient stock for ${product.name}`);
+        throw new AppError(`Insufficient stock for ${product.name}`);
       }
       if (!product.isPriced) {
-        throw new Error(`${product.name} is not priced yet`);
+        throw new AppError(`${product.name} is not priced yet`);
       }
 
       const unitPrice =
@@ -97,10 +91,14 @@ export async function createSale(input: CreateOrderInput) {
           ? roundMoney(item.unitPrice)
           : product.price.toNumber();
       if (unitPrice < 0) {
-        throw new Error("Unit price cannot be negative");
+        throw new AppError("Unit price cannot be negative");
       }
       const discount = item.discount ?? 0;
-      const lineTotal = roundMoney(unitPrice * item.quantity - discount);
+      const gross = roundMoney(unitPrice * item.quantity);
+      if (discount > gross) {
+        throw new AppError("Discount cannot exceed the line total");
+      }
+      const lineTotal = roundMoney(gross - discount);
       subtotal += lineTotal;
 
       lineItems.push({
@@ -116,10 +114,17 @@ export async function createSale(input: CreateOrderInput) {
 
     subtotal = roundMoney(subtotal);
     const discountTotal = roundMoney(input.discountTotal ?? 0);
+    if (discountTotal > subtotal) {
+      throw new AppError("Discount cannot exceed the subtotal");
+    }
     const taxAmount = 0;
-    const total = roundMoney(Math.max(subtotal - discountTotal, 0));
+    const total = roundMoney(subtotal - discountTotal);
     const orderNumber = await nextOrderNumber(tx, input.storeId);
     const now = new Date();
+
+    if (input.customerId) {
+      await requireStoreCustomer(tx, input.storeId, input.customerId);
+    }
 
     const order = await tx.order.create({
       data: {
@@ -161,19 +166,27 @@ export async function createSale(input: CreateOrderInput) {
       include: {
         items: true,
         payments: true,
-        cashier: { select: { id: true, name: true, phone: true } },
+        cashier: { select: { id: true, name: true } },
       },
     });
 
     for (const line of lineItems) {
-      const product = productMap.get(line.productId)!;
-      const stockBefore = product.onStock;
-      const stockAfter = stockBefore - line.quantity;
-
-      await tx.product.update({
-        where: { id: line.productId },
-        data: { onStock: stockAfter },
+      const res = await tx.product.updateMany({
+        where: {
+          id: line.productId,
+          storeId: input.storeId,
+          onStock: { gte: line.quantity },
+        },
+        data: { onStock: { decrement: line.quantity } },
       });
+      if (res.count !== 1) {
+        throw new AppError(`Insufficient stock for ${line.productName}`);
+      }
+      const { onStock: stockAfter } = await tx.product.findUniqueOrThrow({
+        where: { id: line.productId },
+        select: { onStock: true },
+      });
+      const stockBefore = stockAfter + line.quantity;
 
       await tx.stockMovement.create({
         data: {
@@ -189,20 +202,25 @@ export async function createSale(input: CreateOrderInput) {
       });
     }
 
+    let pointsEarned = 0;
     if (input.customerId) {
       const customer = await tx.customer.findFirst({
         where: { id: input.customerId, storeId: input.storeId },
       });
       if (customer?.loyaltyEnrolled) {
-        const pointsEarned = Math.floor(total);
+        pointsEarned = Math.floor(total);
         await tx.customer.update({
           where: { id: customer.id },
           data: { loyaltyPoints: { increment: pointsEarned } },
         });
+        await tx.order.update({
+          where: { id: order.id },
+          data: { loyaltyPointsEarned: pointsEarned },
+        });
       }
     }
 
-    return order;
+    return { ...order, loyaltyPointsEarned: pointsEarned };
   },
     { timeout: 20000 },
   );
@@ -284,7 +302,7 @@ export async function listOrders(
         include: { user: { select: { id: true, name: true } } },
         orderBy: { createdAt: "desc" },
       },
-      cashier: { select: { id: true, name: true, phone: true } },
+      cashier: { select: { id: true, name: true } },
     },
     orderBy: { createdAt: "desc" },
     take: limit,
@@ -302,7 +320,7 @@ export async function getOrder(storeId: string, orderId: string) {
         include: { user: { select: { id: true, name: true } } },
         orderBy: { createdAt: "desc" },
       },
-      cashier: { select: { id: true, name: true, phone: true } },
+      cashier: { select: { id: true, name: true } },
       customer: true,
     },
   });
@@ -389,6 +407,7 @@ export async function getItemSalesReport(
       },
     },
     orderBy: { order: { createdAt: "desc" } },
+    take: 5000,
   });
 
   const items: ItemSalesLine[] = lineItems.map((line) => {

@@ -1,3 +1,4 @@
+import { errorResponse } from "../lib/errors.js";
 import { Hono } from "hono";
 import { CalendarEventType } from "@prisma/client";
 import { z } from "zod";
@@ -128,8 +129,7 @@ calendarRoutes.post("/", requireAuth, requireAnyPermission("calendar.manage"), a
 
     return c.json({ event: await presentEvent(event, c.req.url) }, 201);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not create event";
-    return c.json({ error: message }, 400);
+    return errorResponse(c, error, "Could not create event");
   }
 });
 
@@ -160,8 +160,7 @@ calendarRoutes.patch("/:id", requireAuth, requireAnyPermission("calendar.manage"
 
     return c.json({ event: await presentEvent(event, c.req.url) });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not update event";
-    return c.json({ error: message }, 400);
+    return errorResponse(c, error, "Could not update event");
   }
 });
 
@@ -191,8 +190,7 @@ calendarRoutes.post(
     }
     return c.json({ event: await presentEvent(event, c.req.url) }, 201);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not record payment";
-    return c.json({ error: message }, 400);
+    return errorResponse(c, error, "Could not record payment");
   }
 });
 
@@ -207,8 +205,7 @@ calendarRoutes.post(
     const event = await completeCalendarEvent(storeId, c.req.param("id"));
     return c.json({ event: await presentEvent(event, c.req.url) });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not complete event";
-    return c.json({ error: message }, 400);
+    return errorResponse(c, error, "Could not complete event");
   }
 });
 
@@ -219,7 +216,6 @@ calendarRoutes.delete("/:id", requireAuth, requireAnyPermission("calendar.manage
     await deleteCalendarEvent(storeId, c.req.param("id"));
     return c.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Could not delete event";
-    return c.json({ error: message }, 400);
+    return errorResponse(c, error, "Could not delete event");
   }
 });

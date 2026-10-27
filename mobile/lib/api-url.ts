@@ -1,4 +1,4 @@
-const PRODUCTION_API = "https://dapos-api-production.up.railway.app";
+const PRODUCTION_API = "https://dapos.up.railway.app";
 
 export const API_URL = (() => {
   if (__DEV__ && typeof window !== "undefined" && window.location?.hostname) {

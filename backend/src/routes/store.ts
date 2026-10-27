@@ -2,6 +2,7 @@ import { Currency } from "@prisma/client";
 import { Hono } from "hono";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
+import { recordAudit } from "../lib/audit.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
 import { requireAnyPermission } from "../middleware/permissions.js";
@@ -42,15 +43,26 @@ storeRoutes.patch("/", requireAuth, requireAnyPermission("settings.manage"), asy
     return c.json({ error: "Invalid store payload", details: parsed.error.flatten() }, 400);
   }
 
-  const store = await prisma.store.update({
-    where: { id: storeId },
-    data: {
-      ...(parsed.data.name !== undefined ? { name: parsed.data.name.trim() } : {}),
-      ...(parsed.data.address !== undefined ? { address: parsed.data.address } : {}),
-      ...(parsed.data.phone !== undefined ? { phone: parsed.data.phone } : {}),
-      ...(parsed.data.currency !== undefined ? { currency: parsed.data.currency } : {}),
-      ...(parsed.data.taxRate !== undefined ? { taxRate: parsed.data.taxRate } : {}),
-    },
+  const store = await prisma.$transaction(async (tx) => {
+    const updated = await tx.store.update({
+      where: { id: storeId },
+      data: {
+        ...(parsed.data.name !== undefined ? { name: parsed.data.name.trim() } : {}),
+        ...(parsed.data.address !== undefined ? { address: parsed.data.address } : {}),
+        ...(parsed.data.phone !== undefined ? { phone: parsed.data.phone } : {}),
+        ...(parsed.data.currency !== undefined ? { currency: parsed.data.currency } : {}),
+        ...(parsed.data.taxRate !== undefined ? { taxRate: parsed.data.taxRate } : {}),
+      },
+    });
+    await recordAudit(tx, {
+      storeId,
+      actorId: c.get("auth").sub,
+      action: "store.settings",
+      entityType: "store",
+      entityId: storeId,
+      details: parsed.data,
+    });
+    return updated;
   });
 
   return c.json({

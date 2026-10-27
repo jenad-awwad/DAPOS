@@ -5,6 +5,7 @@ import { phoneCandidates } from "../lib/phone.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
 import { requireAnyPermission } from "../middleware/permissions.js";
+import { userHasPermission, type PermissionKey } from "../lib/permissions.js";
 import { listCustomersWithStats } from "../services/customers.js";
 
 const createCustomerSchema = z.object({
@@ -43,8 +44,30 @@ const listCustomersQuerySchema = z.object({
     .optional(),
 });
 
-customerRoutes.get("/", requireAuth, async (c) => {
+const CUSTOMER_LIST_PERMISSIONS = [
+  "customers.view",
+  "customers.manage",
+  "pos.sales",
+  "pos.loyalty",
+  "pos.projects",
+  "calendar.view",
+  "calendar.manage",
+] as const;
+
+function canSeeCustomerDetails(permissions: PermissionKey[]) {
+  return (
+    userHasPermission(permissions, "customers.view") ||
+    userHasPermission(permissions, "customers.manage")
+  );
+}
+
+customerRoutes.get(
+  "/",
+  requireAuth,
+  requireAnyPermission(...CUSTOMER_LIST_PERMISSIONS),
+  async (c) => {
   const { storeId } = c.get("auth");
+  const permissions = c.get("permissions");
   const parsed = listCustomersQuerySchema.safeParse({
     search: c.req.query("search"),
     loyalty: c.req.query("loyalty"),
@@ -61,6 +84,11 @@ customerRoutes.get("/", requireAuth, async (c) => {
   const loyaltyOnly = parsed.data.loyalty === "true";
   const nonLoyaltyOnly = parsed.data.loyalty === "false";
   const withStats = parsed.data.stats === "true";
+  const fullDetails = canSeeCustomerDetails(permissions);
+
+  if (withStats && !fullDetails) {
+    return c.json({ error: "Forbidden" }, 403);
+  }
 
   if (withStats) {
     const report = await listCustomersWithStats(storeId, {
@@ -92,7 +120,17 @@ customerRoutes.get("/", requireAuth, async (c) => {
     orderBy: { name: "asc" },
   });
 
-  return c.json({ customers: serialize(customers) });
+  const visible = fullDetails
+    ? customers
+    : customers.map((customer) => ({
+        id: customer.id,
+        name: customer.name,
+        phone: customer.phone,
+        loyaltyEnrolled: customer.loyaltyEnrolled,
+        loyaltyPoints: customer.loyaltyPoints,
+      }));
+
+  return c.json({ customers: serialize(visible) });
 });
 
 customerRoutes.post("/enroll", requireAuth, requireAnyPermission("pos.loyalty"), async (c) => {
@@ -162,8 +200,9 @@ customerRoutes.post("/enroll", requireAuth, requireAnyPermission("pos.loyalty"),
   return c.json({ customer: serialize(customer) }, 201);
 });
 
-customerRoutes.post("/pos", requireAuth, async (c) => {
+customerRoutes.post("/pos", requireAuth, requireAnyPermission("pos.sales"), async (c) => {
   const { storeId } = c.get("auth");
+  const canManage = userHasPermission(c.get("permissions"), "customers.manage");
   const body = await c.req.json().catch(() => null);
   const parsed = posCustomerSchema.safeParse(body);
 
@@ -182,6 +221,9 @@ customerRoutes.post("/pos", requireAuth, async (c) => {
   });
 
   if (byPhone) {
+    if (!canManage) {
+      return c.json({ customer: serialize(byPhone) });
+    }
     const customer = await prisma.customer.update({
       where: { id: byPhone.id },
       data: { name, phone },
@@ -200,7 +242,11 @@ customerRoutes.post("/pos", requireAuth, async (c) => {
   return c.json({ customer: serialize(customer) }, 201);
 });
 
-customerRoutes.get("/:id", requireAuth, async (c) => {
+customerRoutes.get(
+  "/:id",
+  requireAuth,
+  requireAnyPermission("customers.view", "customers.manage"),
+  async (c) => {
   const { storeId } = c.get("auth");
 
   const customer = await prisma.customer.findFirst({

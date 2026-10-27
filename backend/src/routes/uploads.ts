@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import {
+  attachmentAccessValid,
   isProductImageKey,
   isRemoteStorageConfigured,
   isSafeAttachmentKey,
@@ -9,6 +10,7 @@ import {
   resolveAttachmentUrl,
   uploadVendorAttachment,
 } from "../lib/object-storage.js";
+import { errorResponse } from "../lib/errors.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
 import { requireAnyPermission } from "../middleware/permissions.js";
 
@@ -23,6 +25,14 @@ uploadRoutes.get("/files/*", async (c) => {
   const key = decodeURIComponent(pathname.replace(/^\/uploads\/files\//, ""));
   if (!isSafeAttachmentKey(key)) {
     return c.json({ error: "File not found" }, 404);
+  }
+
+  if (!isProductImageKey(key)) {
+    const exp = c.req.query("exp");
+    const sig = c.req.query("sig");
+    if (!attachmentAccessValid(key, exp, sig)) {
+      return c.json({ error: "Forbidden" }, 403);
+    }
   }
 
   // Stored paths are stable (`/uploads/files/<key>`) regardless of where the
@@ -45,6 +55,9 @@ uploadRoutes.get("/files/*", async (c) => {
   return c.body(new Uint8Array(file.buffer), 200, {
     "Content-Type": file.contentType,
     "Cache-Control": cacheControl,
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'",
+    "Content-Disposition": "inline",
   });
 });
 
@@ -81,9 +94,8 @@ uploadRoutes.post(
         storeId,
       );
       return c.json({ key }, 201);
-    } catch (err) {
-      console.error(err);
-      return c.json({ error: "Upload failed" }, 500);
+    } catch (error) {
+      return errorResponse(c, error, "Upload failed");
     }
   },
 );
@@ -116,9 +128,8 @@ uploadRoutes.post(
         storeId,
       );
       return c.json({ key }, 201);
-    } catch (err) {
-      console.error(err);
-      return c.json({ error: "Upload failed" }, 500);
+    } catch (error) {
+      return errorResponse(c, error, "Upload failed");
     }
   },
 );

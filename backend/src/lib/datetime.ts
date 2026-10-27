@@ -1,9 +1,10 @@
+import { AppError } from "./errors.js";
 import { z } from "zod";
 
 export function parseDateTime(value: string): Date {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    throw new Error("Invalid datetime");
+    throw new AppError("Invalid datetime");
   }
   return date;
 }

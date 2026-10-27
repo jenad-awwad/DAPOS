@@ -24,13 +24,13 @@ function run(cmd, args, options = {}) {
   return (result.stdout || "").trim();
 }
 
-function readJwtSecret() {
+function readEnvValue(name) {
   if (!existsSync(".env")) {
     throw new Error(".env missing — run: node scripts/set-jwt-env.mjs");
   }
-  const match = readFileSync(".env", "utf8").match(/^JWT_SECRET="(.+)"$/m);
+  const match = readFileSync(".env", "utf8").match(new RegExp(`^${name}="(.+)"$`, "m"));
   if (!match) {
-    throw new Error("JWT_SECRET not found in .env");
+    throw new Error(`${name} not found in .env`);
   }
   return match[1];
 }
@@ -38,7 +38,8 @@ function readJwtSecret() {
 console.log("Checking Railway login...");
 run("railway", ["whoami"]);
 
-const jwt = readJwtSecret();
+const jwt = readEnvValue("JWT_SECRET");
+const pepper = readEnvValue("PIN_PEPPER");
 console.log("Ensuring dapos-api service...");
 try {
   run("railway", ["service", "dapos-api"]);
@@ -49,6 +50,7 @@ try {
 
 console.log("Setting variables...");
 run("railway", ["variables", "--set", `JWT_SECRET=${jwt}`, "--skip-deploys"]);
+run("railway", ["variables", "--set", `PIN_PEPPER=${pepper}`, "--skip-deploys"]);
 run("railway", [
   "variables",
   "--set",

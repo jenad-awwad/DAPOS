@@ -25,6 +25,27 @@ export async function clearToken(): Promise<void> {
   await clearStoredToken();
 }
 
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+type UnauthorizedListener = () => void;
+let onUnauthorized: UnauthorizedListener | null = null;
+
+export function setUnauthorizedHandler(handler: UnauthorizedListener | null) {
+  onUnauthorized = handler;
+}
+
+export function notifyUnauthorized() {
+  onUnauthorized?.();
+}
+
 
 
 async function request<T>(
@@ -66,8 +87,13 @@ async function request<T>(
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      throw new Error(
+      if (response.status === 401 && !path.startsWith("/auth/login")) {
+        await clearToken();
+        notifyUnauthorized();
+      }
+      throw new ApiError(
         typeof data.error === "string" ? data.error : "Request failed",
+        response.status,
       );
     }
 

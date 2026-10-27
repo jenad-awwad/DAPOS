@@ -1,6 +1,8 @@
+import { AppError } from "../lib/errors.js";
 import { CalendarEventStatus, CalendarEventType, OrderType, PaymentMethod, PaymentStatus } from "@prisma/client";
 import { assertStoreAttachmentKey } from "../lib/object-storage.js";
 import { prisma } from "../lib/prisma.js";
+import { requireStoreCustomer } from "../lib/tenant.js";
 
 type CreateCalendarEventInput = {
   storeId: string;
@@ -55,7 +57,10 @@ async function resolveCustomerId(
   customerName?: string,
   customerPhone?: string,
 ) {
-  if (customerId) return customerId;
+  if (customerId) {
+    const customer = await requireStoreCustomer(prisma, storeId, customerId);
+    return customer.id;
+  }
 
   if (customerName?.trim() && customerPhone?.trim()) {
     const existing = await prisma.customer.findFirst({
@@ -108,19 +113,19 @@ export async function getCalendarEvent(storeId: string, eventId: string) {
 
 export async function createCalendarEvent(input: CreateCalendarEventInput) {
   if (!input.title.trim()) {
-    throw new Error("Event title is required");
+    throw new AppError("Event title is required");
   }
 
   if (!input.customerPhone?.trim()) {
-    throw new Error("Customer phone number is required");
+    throw new AppError("Customer phone number is required");
   }
 
   if (!input.customerName?.trim() && !input.customerId) {
-    throw new Error("Customer name is required");
+    throw new AppError("Customer name is required");
   }
 
   if (input.price !== undefined && input.price < 0) {
-    throw new Error("Activity price cannot be negative");
+    throw new AppError("Activity price cannot be negative");
   }
 
   if (input.orderId) {
@@ -128,7 +133,7 @@ export async function createCalendarEvent(input: CreateCalendarEventInput) {
       where: { id: input.orderId, storeId: input.storeId },
     });
     if (!order) {
-      throw new Error("Linked order not found");
+      throw new AppError("Linked order not found");
     }
   }
 
@@ -170,22 +175,22 @@ export async function updateCalendarEvent(
     include: { payments: true },
   });
   if (!existing) {
-    throw new Error("Calendar event not found");
+    throw new AppError("Calendar event not found");
   }
 
   if (existing.status === CalendarEventStatus.COMPLETED) {
-    throw new Error("Completed activities cannot be edited");
+    throw new AppError("Completed activities cannot be edited");
   }
 
   if (input.price !== undefined && input.price < 0) {
-    throw new Error("Activity price cannot be negative");
+    throw new AppError("Activity price cannot be negative");
   }
 
   if (input.price !== undefined) {
     const newPrice = roundMoney(input.price);
     const alreadyPaid = paidTotal(existing.payments);
     if (newPrice < alreadyPaid) {
-      throw new Error("Activity price cannot be less than payments already recorded");
+      throw new AppError("Activity price cannot be less than payments already recorded");
     }
   }
 
@@ -194,7 +199,7 @@ export async function updateCalendarEvent(
       where: { id: input.orderId, storeId },
     });
     if (!order) {
-      throw new Error("Linked order not found");
+      throw new AppError("Linked order not found");
     }
   }
 
@@ -241,7 +246,7 @@ export async function recordCalendarEventPayment(
   input: { amount: number; paymentMethod: PaymentMethod },
 ) {
   if (input.amount <= 0) {
-    throw new Error("Payment amount must be greater than zero");
+    throw new AppError("Payment amount must be greater than zero");
   }
 
   const existing = await prisma.calendarEvent.findFirst({
@@ -250,12 +255,12 @@ export async function recordCalendarEventPayment(
   });
 
   if (!existing) {
-    throw new Error("Open calendar activity not found");
+    throw new AppError("Open calendar activity not found");
   }
 
   const price = existing.price?.toNumber() ?? 0;
   if (price <= 0) {
-    throw new Error("Set an activity price before recording payments");
+    throw new AppError("Set an activity price before recording payments");
   }
 
   const alreadyPaid = paidTotal(existing.payments);
@@ -263,11 +268,11 @@ export async function recordCalendarEventPayment(
   const amount = roundMoney(input.amount);
 
   if (balanceDue <= 0) {
-    throw new Error("This activity is already fully paid");
+    throw new AppError("This activity is already fully paid");
   }
 
   if (amount > balanceDue) {
-    throw new Error(`Payment cannot exceed outstanding balance (${balanceDue})`);
+    throw new AppError(`Payment cannot exceed outstanding balance (${balanceDue})`);
   }
 
   await prisma.calendarEventPayment.create({
@@ -288,11 +293,11 @@ export async function completeCalendarEvent(storeId: string, eventId: string) {
     include: { payments: true },
   });
   if (!existing) {
-    throw new Error("Calendar event not found");
+    throw new AppError("Calendar event not found");
   }
 
   if (existing.status === CalendarEventStatus.COMPLETED) {
-    throw new Error("Activity is already completed");
+    throw new AppError("Activity is already completed");
   }
 
   if (existing.orderId) {
@@ -308,11 +313,11 @@ export async function completeCalendarEvent(storeId: string, eventId: string) {
           .reduce((sum, payment) => sum + payment.amount.toNumber(), 0),
       );
       if (paidTotal !== totalDue) {
-        throw new Error(
+        throw new AppError(
           `Payments (${paidTotal}) must equal the customer price (${totalDue}) before this project can be closed.`,
         );
       }
-      throw new Error(
+      throw new AppError(
         "Close this project from the project screen after it is fully paid. It stays on the calendar.",
       );
     }
@@ -323,7 +328,7 @@ export async function completeCalendarEvent(storeId: string, eventId: string) {
     const alreadyPaid = paidTotal(existing.payments);
     const balanceDue = roundMoney(price - alreadyPaid);
     if (balanceDue > 0) {
-      throw new Error(
+      throw new AppError(
         `Outstanding balance of ${balanceDue}. Record payments until fully paid before closing.`,
       );
     }
@@ -341,11 +346,11 @@ export async function deleteCalendarEvent(storeId: string, eventId: string) {
     where: { id: eventId, storeId },
   });
   if (!existing) {
-    throw new Error("Calendar event not found");
+    throw new AppError("Calendar event not found");
   }
 
   if (existing.status === CalendarEventStatus.COMPLETED) {
-    throw new Error("Completed activities cannot be deleted");
+    throw new AppError("Completed activities cannot be deleted");
   }
 
   if (existing.orderId) {
@@ -354,7 +359,7 @@ export async function deleteCalendarEvent(storeId: string, eventId: string) {
       select: { orderType: true },
     });
     if (linkedOrder?.orderType === OrderType.PROJECT) {
-      throw new Error("A project stays on the calendar and cannot be removed from it.");
+      throw new AppError("A project stays on the calendar and cannot be removed from it.");
     }
   }
 

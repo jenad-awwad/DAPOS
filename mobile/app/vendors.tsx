@@ -509,7 +509,7 @@ function AddPaymentModal({
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
+  screen: { flex: 1, backgroundColor: colors.background },
   backRow: {
     flexDirection: "row",
     alignItems: "center",

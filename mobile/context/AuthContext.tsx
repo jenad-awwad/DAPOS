@@ -7,7 +7,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { clearToken, getToken, login as apiLogin, setToken } from "../lib/api";
+import {
+  ApiError,
+  clearToken,
+  getToken,
+  login as apiLogin,
+  setToken,
+  setUnauthorizedHandler,
+} from "../lib/api";
 import type { Store, User } from "../lib/types";
 
 type AuthContextValue = {
@@ -39,15 +46,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const data = await request<{ user: User; store: Store }>("/auth/me");
       setUser(data.user);
       setStore(data.store);
-    } catch {
-      await clearToken();
-      setUser(null);
-      setStore(null);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        await clearToken();
+        setUser(null);
+        setStore(null);
+      }
     }
   }, []);
 
   useEffect(() => {
+    setUnauthorizedHandler(() => {
+      setUser(null);
+      setStore(null);
+    });
     refreshSession().finally(() => setLoading(false));
+    return () => setUnauthorizedHandler(null);
   }, [refreshSession]);
 
   const signIn = useCallback(async (phone: string, pin: string) => {

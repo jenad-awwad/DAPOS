@@ -4,6 +4,8 @@ import {
   StockMovementType,
 } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
+import { AppError } from "../lib/errors.js";
+import { recordAudit } from "../lib/audit.js";
 import { getOrder } from "./orders.js";
 
 export async function voidOrder(
@@ -19,14 +21,21 @@ export async function voidOrder(
       });
 
       if (!order) {
-        throw new Error("Order not found");
-      }
-
-      if (order.status !== OrderStatus.COMPLETED) {
-        throw new Error("Only completed orders can be voided");
+        throw new AppError("Order not found");
       }
 
       const now = new Date();
+      const claimed = await tx.order.updateMany({
+        where: { id: orderId, storeId, status: OrderStatus.COMPLETED },
+        data: {
+          status: OrderStatus.VOIDED,
+          voidedAt: now,
+          voidedById: userId,
+        },
+      });
+      if (claimed.count !== 1) {
+        throw new AppError("Only completed orders can be voided");
+      }
 
       for (const item of order.items) {
         const product = await tx.product.findFirst({
@@ -34,13 +43,15 @@ export async function voidOrder(
         });
         if (!product) continue;
 
-        const stockBefore = product.onStock;
-        const stockAfter = stockBefore + item.quantity;
-
         await tx.product.update({
           where: { id: product.id },
-          data: { onStock: stockAfter },
+          data: { onStock: { increment: item.quantity } },
         });
+        const { onStock: stockAfter } = await tx.product.findUniqueOrThrow({
+          where: { id: product.id },
+          select: { onStock: true },
+        });
+        const stockBefore = stockAfter - item.quantity;
 
         await tx.stockMovement.create({
           data: {
@@ -62,17 +73,37 @@ export async function voidOrder(
         data: { status: PaymentStatus.REFUNDED },
       });
 
-      const updated = await tx.order.update({
+      if (order.customerId && order.loyaltyPointsEarned > 0) {
+        const customer = await tx.customer.findFirst({
+          where: { id: order.customerId, storeId },
+        });
+        if (customer) {
+          const takeBack = Math.min(order.loyaltyPointsEarned, customer.loyaltyPoints);
+          if (takeBack > 0) {
+            await tx.customer.update({
+              where: { id: customer.id },
+              data: { loyaltyPoints: { decrement: takeBack } },
+            });
+          }
+        }
+      }
+
+      await recordAudit(tx, {
+        storeId,
+        actorId: userId,
+        action: "order.void",
+        entityType: "order",
+        entityId: order.id,
+        details: { orderNumber: order.orderNumber },
+      });
+
+      const updated = await tx.order.findFirstOrThrow({
         where: { id: order.id },
-        data: {
-          status: OrderStatus.VOIDED,
-          voidedAt: now,
-        },
         include: {
           items: true,
           payments: true,
           projectMaterials: true,
-          cashier: { select: { id: true, name: true, phone: true } },
+          cashier: { select: { id: true, name: true } },
           customer: true,
         },
       });

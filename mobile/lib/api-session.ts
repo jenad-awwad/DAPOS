@@ -1,4 +1,4 @@
-import { getToken } from "./api";
+import { ApiError, clearToken, getToken, notifyUnauthorized } from "./api";
 import { API_URL } from "./api-url";
 
 export async function request<T>(
@@ -21,8 +21,13 @@ export async function request<T>(
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      throw new Error(
+      if (response.status === 401 && !path.startsWith("/auth/login")) {
+        await clearToken();
+        notifyUnauthorized();
+      }
+      throw new ApiError(
         typeof data.error === "string" ? data.error : "Request failed",
+        response.status,
       );
     }
 
