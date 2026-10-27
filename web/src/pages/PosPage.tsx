@@ -19,8 +19,12 @@ import {
 import { notifications } from "@mantine/notifications";
 import { IconBarcode, IconTrash } from "@tabler/icons-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import {
+  BarcodeCameraScanner,
+  requestBarcodeCamera,
+} from "../components/BarcodeCameraScanner";
 import { PosProjectPanel } from "../components/PosProjectPanel";
 import { useAuth } from "../context/AuthContext";
 import { useHasPermission } from "../hooks/usePermissions";
@@ -74,6 +78,8 @@ export function PosPage() {
   const [search, setSearch] = useState("");
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [barcode, setBarcode] = useState("");
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const cameraRequestRef = useRef<Promise<MediaStream> | null>(null);
   const [invoiceDiscountPercent, setInvoiceDiscountPercent] = useState<number | "">(0);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
   const [otherPayment, setOtherPayment] = useState<PaymentMethod>("DEBIT");
@@ -142,23 +148,36 @@ export function PosPage() {
     ];
   }, [categoriesQuery.data]);
 
-  const handleBarcode = async () => {
-    const code = barcode.trim();
-    if (!code) return;
+  const lookupBarcode = async (raw: string, announce = false) => {
+    const code = raw.trim();
+    if (!code) {
+      return { ok: false, message: "Barcode is empty" };
+    }
     try {
       const { product } = await fetchProductByBarcode(code);
       addProduct(product);
       setBarcode("");
-      notifications.show({
-        color: "green",
-        message: `Added ${product.name}`,
-      });
+      if (announce) {
+        notifications.show({
+          color: "green",
+          message: `Added ${product.name}`,
+        });
+      }
+      return { ok: true, message: `Added ${product.name}` };
     } catch (err) {
-      notifications.show({
-        color: "red",
-        message: err instanceof Error ? err.message : "Product not found",
-      });
+      const message = err instanceof Error ? err.message : "Product not found";
+      if (announce) notifications.show({ color: "red", message });
+      return { ok: false, message };
     }
+  };
+
+  const handleBarcode = () => {
+    void lookupBarcode(barcode, true);
+  };
+
+  const openCameraScanner = () => {
+    cameraRequestRef.current = requestBarcodeCamera();
+    setScannerOpen(true);
   };
 
   const selectLoyaltyCustomer = (id: string | null) => {
@@ -384,8 +403,8 @@ export function PosPage() {
                     <ActionIcon
                       variant="light"
                       color="green"
-                      aria-label="Barcode scan"
-                      onClick={handleBarcode}
+                      aria-label="Scan barcode with camera"
+                      onClick={openCameraScanner}
                     >
                       <IconBarcode size={16} />
                     </ActionIcon>
@@ -650,6 +669,13 @@ export function PosPage() {
           </Tabs.Panel>
         ) : null}
       </Tabs>
+
+      <BarcodeCameraScanner
+        opened={scannerOpen}
+        streamRequestRef={cameraRequestRef}
+        onClose={() => setScannerOpen(false)}
+        onDetected={lookupBarcode}
+      />
 
       <Modal
         opened={debitModalOpen}
