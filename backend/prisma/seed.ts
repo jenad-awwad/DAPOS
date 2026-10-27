@@ -145,11 +145,13 @@ async function main() {
         supplier: product.supplier,
         onStock: product.onStock,
         isPriced: true,
+        showOnPos: true,
       },
       create: {
         storeId: store.id,
         ...product,
         isPriced: true,
+        showOnPos: true,
       },
     });
   }

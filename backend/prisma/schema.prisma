@@ -204,6 +204,7 @@ model Product {
   lowStockAt  Int?
   isPriced    Boolean  @default(false)
   isActive    Boolean  @default(true)
+  showOnPos   Boolean  @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

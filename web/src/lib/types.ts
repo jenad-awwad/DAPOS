@@ -147,6 +147,7 @@ export type Product = {
   categoryId: string | null;
   isPriced: boolean;
   isActive?: boolean;
+  showOnPos?: boolean;
   category?: Category | null;
 };
 

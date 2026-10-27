@@ -23,6 +23,7 @@ import { useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   BarcodeCameraScanner,
+  primeScanFeedback,
   requestBarcodeCamera,
 } from "../components/BarcodeCameraScanner";
 import { PosProjectPanel } from "../components/PosProjectPanel";
@@ -79,6 +80,7 @@ export function PosPage() {
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [barcode, setBarcode] = useState("");
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [lastScannedId, setLastScannedId] = useState<string | null>(null);
   const cameraRequestRef = useRef<Promise<MediaStream> | null>(null);
   const [invoiceDiscountPercent, setInvoiceDiscountPercent] = useState<number | "">(0);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
@@ -109,9 +111,23 @@ export function PosPage() {
 
   const catalog = catalogQuery.data?.products ?? [];
 
+  const registerCatalog = useMemo(() => {
+    const counts = new Map<string, number>();
+    return catalog
+      .filter((product) => product.showOnPos)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .filter((product) => {
+        const key = product.categoryId ?? "";
+        const count = counts.get(key) ?? 0;
+        if (count >= 12) return false;
+        counts.set(key, count + 1);
+        return true;
+      });
+  }, [catalog]);
+
   const visibleProducts = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return catalog.filter((product) => {
+    return registerCatalog.filter((product) => {
       if (categoryId && product.categoryId !== categoryId) return false;
       if (!query) return true;
       return (
@@ -120,7 +136,7 @@ export function PosPage() {
         product.barcode.toLowerCase().includes(query)
       );
     });
-  }, [catalog, categoryId, search]);
+  }, [registerCatalog, categoryId, search]);
 
   const customersQuery = useQuery({
     queryKey: ["customers", "loyalty"],
@@ -156,6 +172,7 @@ export function PosPage() {
     try {
       const { product } = await fetchProductByBarcode(code);
       addProduct(product);
+      setLastScannedId(product.id);
       setBarcode("");
       if (announce) {
         notifications.show({
@@ -176,9 +193,27 @@ export function PosPage() {
   };
 
   const openCameraScanner = () => {
+    primeScanFeedback();
     cameraRequestRef.current = requestBarcodeCamera();
     setScannerOpen(true);
   };
+
+  const scannedItem = items.find((item) => item.product.id === lastScannedId) ?? null;
+  const scannedLine =
+    scannedItem && store
+      ? {
+          name: scannedItem.product.name,
+          quantity: scannedItem.quantity,
+          unitPrice: scannedItem.unitPrice,
+          maxQuantity: scannedItem.product.onStock,
+          priceLabel: formatMoney(scannedItem.unitPrice, store.currency),
+          totalLabel: formatMoney(
+            scannedItem.unitPrice * scannedItem.quantity,
+            store.currency,
+          ),
+          canChangePrice,
+        }
+      : null;
 
   const selectLoyaltyCustomer = (id: string | null) => {
     setCustomerId(id);
@@ -675,6 +710,13 @@ export function PosPage() {
         streamRequestRef={cameraRequestRef}
         onClose={() => setScannerOpen(false)}
         onDetected={lookupBarcode}
+        line={scannedLine}
+        onQuantityChange={(quantity) => {
+          if (lastScannedId) setQuantity(lastScannedId, quantity);
+        }}
+        onPriceChange={(unitPrice) => {
+          if (lastScannedId) setUnitPrice(lastScannedId, unitPrice);
+        }}
       />
 
       <Modal

@@ -67,7 +67,10 @@ const updateProductSchema = z.object({
   lowStockAt: z.number().int().min(0).optional().nullable(),
   categoryId: z.string().optional().nullable(),
   isActive: z.boolean().optional(),
+  showOnPos: z.boolean().optional(),
 });
+
+const POS_CATEGORY_LIMIT = 12;
 
 const listProductsQuerySchema = z.object({
   search: z.string().trim().min(1).optional(),
@@ -370,7 +373,12 @@ productRoutes.get("/:id", requireAuth, async (c) => {
 productRoutes.patch(
   "/:id",
   requireAuth,
-  requireAnyPermission("products.details", "products.price", "products.manage"),
+  requireAnyPermission(
+    "products.details",
+    "products.price",
+    "products.manage",
+    "inventory.manage",
+  ),
   async (c) => {
   const { storeId, sub } = c.get("auth");
   const permissions = c.get("permissions");
@@ -401,6 +409,11 @@ productRoutes.patch(
   if (parsed.data.isActive !== undefined && !canManage) {
     return c.json({ error: "You do not have permission to publish or deactivate products" }, 403);
   }
+  const canChooseRegister =
+    canManage || userHasPermission(permissions, "inventory.manage");
+  if (parsed.data.showOnPos !== undefined && !canChooseRegister) {
+    return c.json({ error: "You do not have permission to choose register items" }, 403);
+  }
 
   const existing = await prisma.product.findFirst({
     where: { id: c.req.param("id"), storeId },
@@ -416,6 +429,33 @@ productRoutes.patch(
     });
     if (!category) {
       return c.json({ error: "Category not found" }, 400);
+    }
+  }
+
+  const nextShowOnPos = parsed.data.showOnPos ?? existing.showOnPos;
+  const nextCategoryId =
+    parsed.data.categoryId !== undefined ? parsed.data.categoryId : existing.categoryId;
+  const registerMembershipChanged =
+    (parsed.data.showOnPos === true && !existing.showOnPos) ||
+    (nextShowOnPos &&
+      parsed.data.categoryId !== undefined &&
+      parsed.data.categoryId !== existing.categoryId);
+  if (nextShowOnPos && parsed.data.isActive !== false && registerMembershipChanged) {
+    const priced = existing.isPriced || parsed.data.price !== undefined;
+    if (!priced) {
+      return c.json({ error: "Set a price before showing this item on the register" }, 400);
+    }
+    const shownInCategory = await prisma.product.count({
+      where: {
+        storeId,
+        showOnPos: true,
+        isActive: true,
+        categoryId: nextCategoryId,
+        NOT: { id: existing.id },
+      },
+    });
+    if (shownInCategory >= POS_CATEGORY_LIMIT) {
+      return c.json({ error: "This category already has 12 items on the register" }, 400);
     }
   }
 
@@ -490,6 +530,8 @@ productRoutes.patch(
           ? { categoryId: parsed.data.categoryId }
           : {}),
         ...(parsed.data.isActive !== undefined ? { isActive: parsed.data.isActive } : {}),
+        ...(parsed.data.showOnPos !== undefined ? { showOnPos: parsed.data.showOnPos } : {}),
+        ...(parsed.data.isActive === false ? { showOnPos: false } : {}),
         ...(parsed.data.price !== undefined || parsed.data.cost !== undefined
           ? { isPriced: pricingComplete }
           : {}),

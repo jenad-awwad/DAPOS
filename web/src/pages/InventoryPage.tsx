@@ -5,16 +5,20 @@ import {
   Loader,
   SegmentedControl,
   Stack,
+  Switch,
   Text,
   TextInput,
   Title,
 } from "@mantine/core";
-import { useQuery } from "@tanstack/react-query";
+import { notifications } from "@mantine/notifications";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ProductCard } from "../components/ProductCard";
 import { useAuth } from "../context/AuthContext";
-import { fetchCategories, fetchProducts } from "../lib/api";
+import { useHasPermission } from "../hooks/usePermissions";
+import { fetchCategories, fetchProducts, updateProduct } from "../lib/api";
+import type { Product } from "../lib/types";
 
 export function InventoryPage() {
   const { store } = useAuth();
@@ -22,6 +26,9 @@ export function InventoryPage() {
   const [search, setSearch] = useState("");
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const lowStockOnly = searchParams.get("lowStock") === "1";
+  const canChooseRegister = useHasPermission(["inventory.manage", "products.manage"]);
+  const queryClient = useQueryClient();
+  const [pendingId, setPendingId] = useState<string | null>(null);
 
   const categoriesQuery = useQuery({
     queryKey: ["categories"],
@@ -49,12 +56,30 @@ export function InventoryPage() {
   if (productsQuery.isLoading) return <Loader color="green" />;
 
   const products = productsQuery.data?.products ?? [];
+  const onRegister = products.filter((product) => product.showOnPos).length;
+
+  const toggleRegister = async (product: Product, showOnPos: boolean) => {
+    setPendingId(product.id);
+    try {
+      await updateProduct(product.id, { showOnPos });
+      await queryClient.invalidateQueries({ queryKey: ["products"] });
+    } catch (err) {
+      notifications.show({
+        color: "red",
+        message: err instanceof Error ? err.message : "Could not update the register",
+      });
+    } finally {
+      setPendingId(null);
+    }
+  };
 
   return (
     <Stack gap="lg">
       <div>
         <Title order={2}>Inventory</Title>
-        <Text c="dimmed">Browse products, stock levels, and suppliers</Text>
+        <Text c="dimmed">
+          Browse products and choose up to 12 items from each category for the register
+        </Text>
       </div>
 
       <Group grow align="flex-end">
@@ -91,17 +116,23 @@ export function InventoryPage() {
         }}
       >
         {products.map((product) => (
-          <Link
-            key={product.id}
-            to={`/inventory/${product.id}`}
-            style={{ textDecoration: "none", color: "inherit" }}
-          >
-            <ProductCard
-              product={product}
-              currency={store!.currency}
-              onClick={() => {}}
-            />
-          </Link>
+          <Stack key={product.id} gap={6}>
+            <Link to={`/inventory/${product.id}`} style={{ textDecoration: "none", color: "inherit" }}>
+              <ProductCard
+                product={product}
+                currency={store!.currency}
+                onClick={() => {}}
+              />
+            </Link>
+            {canChooseRegister ? (
+              <Switch
+                label="Show on register"
+                checked={Boolean(product.showOnPos)}
+                disabled={!product.isPriced || pendingId === product.id}
+                onChange={(event) => void toggleRegister(product, event.currentTarget.checked)}
+              />
+            ) : null}
+          </Stack>
         ))}
       </div>
 
@@ -116,6 +147,11 @@ export function InventoryPage() {
       <Group>
         <Badge variant="light" color="gray">
           {products.length} products
+        </Badge>
+        <Badge variant="light" color="green">
+          {categoryId && !search
+            ? `${onRegister} of 12 on the register`
+            : `${onRegister} on the register`}
         </Badge>
       </Group>
     </Stack>

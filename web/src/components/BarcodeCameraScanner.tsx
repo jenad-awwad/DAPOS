@@ -1,4 +1,4 @@
-import { Button, Group, Modal, Stack, Text } from "@mantine/core";
+import { Button, Group, Modal, NumberInput, SegmentedControl, Stack, Text } from "@mantine/core";
 import { useMediaQuery } from "@mantine/hooks";
 import { IconBolt } from "@tabler/icons-react";
 import { useEffect, useRef, useState } from "react";
@@ -33,11 +33,24 @@ export type BarcodeScanResult = {
   message: string;
 };
 
+export type ScannedLine = {
+  name: string;
+  quantity: number;
+  unitPrice: number;
+  maxQuantity: number;
+  priceLabel: string;
+  totalLabel: string;
+  canChangePrice: boolean;
+};
+
 type BarcodeCameraScannerProps = {
   opened: boolean;
   streamRequestRef: { current: Promise<MediaStream> | null };
   onClose: () => void;
   onDetected: (code: string) => Promise<BarcodeScanResult>;
+  line: ScannedLine | null;
+  onQuantityChange: (quantity: number) => void;
+  onPriceChange: (unitPrice: number) => void;
 };
 
 let detectorPromise: Promise<BarcodeDetectorLike> | null = null;
@@ -107,6 +120,57 @@ function cameraErrorMessage(err: unknown): string {
   return "Could not open the camera.";
 }
 
+let scanAudio: AudioContext | null = null;
+
+function scanAudioContext(): AudioContext | null {
+  const Ctx = window.AudioContext;
+  if (!Ctx) return null;
+  scanAudio ??= new Ctx();
+  if (scanAudio.state === "suspended") void scanAudio.resume();
+  return scanAudio;
+}
+
+function playTone(
+  frequency: number,
+  durationMs: number,
+  delaySec = 0,
+  type: OscillatorType = "sine",
+) {
+  const ctx = scanAudioContext();
+  if (!ctx) return;
+  const start = ctx.currentTime + delaySec;
+  const end = start + durationMs / 1000;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(frequency, start);
+  const peak = type === "square" ? 0.12 : 0.22;
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.exponentialRampToValueAtTime(peak, start + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, end);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(start);
+  osc.stop(end + 0.02);
+}
+
+function feedbackScan(ok: boolean) {
+  if (ok) {
+    navigator.vibrate?.(90);
+    playTone(2637, 90, 0, "square");
+    playTone(3520, 130, 0.1, "square");
+    return;
+  }
+  navigator.vibrate?.([50, 70, 50]);
+  playTone(220, 140);
+  playTone(165, 160, 0.18);
+}
+
+export function primeScanFeedback() {
+  const ctx = scanAudioContext();
+  void ctx?.resume();
+}
+
 function torchTrack(stream: MediaStream): MediaStreamTrack | null {
   const track = stream.getVideoTracks()[0];
   if (!track?.getCapabilities) return null;
@@ -119,6 +183,9 @@ export function BarcodeCameraScanner({
   streamRequestRef,
   onClose,
   onDetected,
+  line,
+  onQuantityChange,
+  onPriceChange,
 }: BarcodeCameraScannerProps) {
   const isPhone = useMediaQuery("(max-width: 48em)");
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -129,8 +196,16 @@ export function BarcodeCameraScanner({
   const [tone, setTone] = useState<"idle" | "ok" | "bad">("idle");
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
+  const [scanMode, setScanMode] = useState<"continuous" | "tap">("continuous");
+  const modeRef = useRef(scanMode);
+  const armedRef = useRef(true);
+  const holdingRef = useRef(false);
+  const suppressValueRef = useRef<string | null>(null);
+  const manualTimerRef = useRef(0);
+  const [holding, setHolding] = useState(false);
 
   onDetectedRef.current = onDetected;
+  modeRef.current = scanMode;
 
   useEffect(() => {
     if (!opened) return;
@@ -140,12 +215,16 @@ export function BarcodeCameraScanner({
     let timer = 0;
     let lastValue = "";
     let lastAt = 0;
+    let missedSince = 0;
 
     setError("");
     setTone("idle");
     setStatus("Starting camera…");
     setTorchAvailable(false);
     setTorchOn(false);
+    holdingRef.current = false;
+    suppressValueRef.current = null;
+    setHolding(false);
     torchTrackRef.current = null;
 
     const stopStream = () => {
@@ -186,16 +265,38 @@ export function BarcodeCameraScanner({
         return;
       }
       if (stopped) return;
-      setStatus("Point the camera at a barcode");
+      setStatus(
+        modeRef.current === "tap"
+          ? "Aim at the barcode, then tap Scan"
+          : "Point the camera at a barcode",
+      );
 
       const tick = async () => {
         if (stopped) return;
-        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        const listening =
+          !holdingRef.current && (modeRef.current === "continuous" || armedRef.current);
+        if (listening && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
           try {
             const codes = await detector.detect(video);
             const value = codes.map((code) => code.rawValue?.trim() ?? "").find(Boolean);
             const now = Date.now();
-            if (value && !(value === lastValue && now - lastAt < 1400)) {
+            if (!value) {
+              if (!missedSince) missedSince = now;
+              if (!holdingRef.current && now - missedSince >= 800) {
+                suppressValueRef.current = null;
+              }
+            } else {
+              missedSince = 0;
+            }
+            if (
+              value &&
+              value !== suppressValueRef.current &&
+              !(value === lastValue && now - lastAt < 1400)
+            ) {
+              if (modeRef.current === "tap") {
+                armedRef.current = false;
+                window.clearTimeout(manualTimerRef.current);
+              }
               lastValue = value;
               lastAt = now;
               setTone("idle");
@@ -205,11 +306,18 @@ export function BarcodeCameraScanner({
                 if (!stopped) {
                   setTone(result.ok ? "ok" : "bad");
                   setStatus(result.message);
+                  feedbackScan(result.ok);
+                  if (result.ok) {
+                    suppressValueRef.current = value;
+                    holdingRef.current = true;
+                    setHolding(true);
+                  }
                 }
               } catch (err) {
                 if (!stopped) {
                   setTone("bad");
                   setStatus(err instanceof Error ? err.message : "Product not found");
+                  feedbackScan(false);
                 }
               }
             }
@@ -250,10 +358,56 @@ export function BarcodeCameraScanner({
     return () => {
       stopped = true;
       window.clearTimeout(timer);
+      window.clearTimeout(manualTimerRef.current);
       stopStream();
       torchTrackRef.current = null;
     };
   }, [opened, streamRequestRef]);
+
+  const chooseScanMode = (mode: "continuous" | "tap") => {
+    setScanMode(mode);
+    modeRef.current = mode;
+    window.clearTimeout(manualTimerRef.current);
+    if (holdingRef.current) {
+      armedRef.current = false;
+      return;
+    }
+    if (mode === "continuous") {
+      armedRef.current = true;
+      setTone("idle");
+      setStatus("Point the camera at a barcode");
+      return;
+    }
+    armedRef.current = false;
+    setTone("idle");
+    setStatus("Aim at the barcode, then tap Scan");
+  };
+
+  const resumeScan = () => {
+    holdingRef.current = false;
+    setHolding(false);
+    setTone("idle");
+    if (modeRef.current === "tap") {
+      startManualScan();
+      return;
+    }
+    armedRef.current = true;
+    setStatus("Point the camera at a barcode");
+  };
+
+  const startManualScan = () => {
+    primeScanFeedback();
+    armedRef.current = true;
+    setTone("idle");
+    setStatus("Scanning…");
+    window.clearTimeout(manualTimerRef.current);
+    manualTimerRef.current = window.setTimeout(() => {
+      if (modeRef.current !== "tap" || !armedRef.current) return;
+      armedRef.current = false;
+      setTone("bad");
+      setStatus("No barcode in view. Tap Scan again.");
+    }, 2500);
+  };
 
   const toggleTorch = async () => {
     const track = torchTrackRef.current;
@@ -280,13 +434,68 @@ export function BarcodeCameraScanner({
       fullScreen={Boolean(isPhone)}
     >
       <Stack gap="sm">
-        <div className="barcode-camera">
+        <div className={holding ? "barcode-camera is-reviewing" : "barcode-camera"}>
           <video ref={videoRef} muted playsInline autoPlay />
           <div className="barcode-camera-frame" />
         </div>
-        <Text size="sm" c={error || tone === "bad" ? "red" : tone === "ok" ? "green" : "dimmed"}>
+        <SegmentedControl
+          fullWidth
+          size="xs"
+          value={scanMode}
+          onChange={(value) => chooseScanMode(value as "continuous" | "tap")}
+          data={[
+            { label: "Continuous", value: "continuous" },
+            { label: "Tap to scan", value: "tap" },
+          ]}
+        />
+        <Text
+          size={tone === "idle" ? "sm" : "md"}
+          fw={tone === "idle" ? 400 : 700}
+          c={error || tone === "bad" ? "red" : tone === "ok" ? "green" : "dimmed"}
+        >
           {error || status}
         </Text>
+        {holding && line ? (
+          <div className="barcode-scan-line">
+            <Text fw={700}>{line.name}</Text>
+            <Text size="xs" c="dimmed">
+              In stock: {line.maxQuantity}
+            </Text>
+            <Group grow align="flex-end">
+              <NumberInput
+                label="Qty"
+                size="sm"
+                min={1}
+                max={line.maxQuantity}
+                value={line.quantity}
+                onChange={(value) => onQuantityChange(Number(value) || 1)}
+              />
+              {line.canChangePrice ? (
+                <NumberInput
+                  label="Price"
+                  size="sm"
+                  min={0}
+                  decimalScale={2}
+                  value={line.unitPrice}
+                  onChange={(value) => onPriceChange(Number(value) || 0)}
+                />
+              ) : (
+                <Stack gap={4}>
+                  <Text size="sm" fw={500}>
+                    Price
+                  </Text>
+                  <Text fw={600}>{line.priceLabel}</Text>
+                </Stack>
+              )}
+            </Group>
+            <Group justify="space-between">
+              <Text size="sm" c="dimmed">
+                Line total
+              </Text>
+              <Text fw={700}>{line.totalLabel}</Text>
+            </Group>
+          </div>
+        ) : null}
         <Group justify="space-between">
           {torchAvailable ? (
             <Button
@@ -300,9 +509,20 @@ export function BarcodeCameraScanner({
           ) : (
             <span />
           )}
-          <Button variant="default" onClick={onClose}>
-            Close
-          </Button>
+          <Group gap="xs">
+            {holding ? (
+              <Button color="green" onClick={resumeScan}>
+                Next scan
+              </Button>
+            ) : scanMode === "tap" ? (
+              <Button color="green" onClick={startManualScan}>
+                Scan
+              </Button>
+            ) : null}
+            <Button variant="default" onClick={onClose}>
+              Close
+            </Button>
+          </Group>
         </Group>
       </Stack>
     </Modal>
@@ -322,13 +542,28 @@ export function requestBarcodeCamera(): Promise<MediaStream> {
     return request;
   }
 
-  const request = navigator.mediaDevices.getUserMedia({
+  const rearCamera = {
+    audio: false,
+    video: {
+      facingMode: { exact: "environment" },
+      width: { ideal: 1280 },
+      height: { ideal: 720 },
+    },
+  };
+  const anyCamera = {
     audio: false,
     video: {
       facingMode: { ideal: "environment" },
       width: { ideal: 1280 },
       height: { ideal: 720 },
     },
+  };
+  const request = navigator.mediaDevices.getUserMedia(rearCamera).catch((err: unknown) => {
+    const noRearCamera =
+      err instanceof DOMException &&
+      (err.name === "OverconstrainedError" || err.name === "NotFoundError");
+    if (!noRearCamera) throw err;
+    return navigator.mediaDevices.getUserMedia(anyCamera);
   });
   request.catch(() => {});
   return request;
