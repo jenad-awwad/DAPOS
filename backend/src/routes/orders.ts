@@ -198,6 +198,7 @@ orderRoutes.get("/", requireAuth, async (c) => {
   const auth = c.get("auth");
   const permissions = c.get("permissions");
   const canViewOrders = userHasPermission(permissions, "orders.view");
+  const canViewProjectOrders = userHasPermission(permissions, "orders.projects");
   const canOpenProjects = userHasPermission(permissions, "pos.projects");
 
   if (!canViewOrders && !canOpenProjects) {
@@ -217,6 +218,14 @@ orderRoutes.get("/", requireAuth, async (c) => {
 
   if (!parsed.success) {
     return c.json({ error: "Invalid order filters", details: parsed.error.flatten() }, 400);
+  }
+
+  if (
+    canViewOrders &&
+    parsed.data.orderType === OrderType.PROJECT &&
+    !canViewProjectOrders
+  ) {
+    return c.json({ error: "You do not have permission to view project orders" }, 403);
   }
 
   const orders = await listOrders(auth.storeId, {

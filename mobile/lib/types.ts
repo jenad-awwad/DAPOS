@@ -13,6 +13,7 @@ export type PermissionKey =
   | "calendar.view"
   | "calendar.manage"
   | "orders.view"
+  | "orders.projects"
   | "orders.items"
   | "orders.void"
   | "inventory.view"

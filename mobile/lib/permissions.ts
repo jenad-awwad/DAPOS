@@ -25,6 +25,7 @@ function roleFallback(role: UserRole, permission: PermissionKey): boolean {
     "pos.loyalty",
     "pos.payments.other",
     "orders.view",
+    "orders.projects",
     "orders.items",
     "calendar.view",
     "calendar.manage",

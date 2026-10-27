@@ -24,6 +24,7 @@ import { useAuth } from "../context/AuthContext";
 import { useHasPermission } from "../hooks/usePermissions";
 import { fetchCashiers, fetchItemSalesReport, fetchOrders } from "../lib/api";
 import { exportItemSalesToExcel } from "../lib/exportItemSales";
+import { exportOrdersToExcel } from "../lib/exportOrders";
 import {
   formatDate,
   formatDateOnly,
@@ -39,7 +40,7 @@ import {
   orderPaymentStateLabel,
   orderTypeOf,
 } from "../lib/orderState";
-import type { OrderType } from "../lib/types";
+import type { Order, OrderType } from "../lib/types";
 
 const ORDER_STATUSES = [
   { value: "OPEN", label: "Open" },
@@ -85,6 +86,7 @@ export function OrdersPage() {
   const { store } = useAuth();
   const canOpenProjects = useHasPermission("pos.projects");
   const canViewAllOrders = useHasPermission("orders.view");
+  const canViewProjectOrders = useHasPermission("orders.projects");
   const canViewItemSales = useHasPermission("orders.items");
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<string | null>("orders");
@@ -111,7 +113,11 @@ export function OrdersPage() {
       limit: 200,
       orderNumber: debouncedOrderNumber || undefined,
       status: status ?? undefined,
-      orderType: canViewAllOrders ? (orderType ?? undefined) : "PROJECT",
+      orderType: canViewAllOrders
+        ? orderType === "PROJECT" && !canViewProjectOrders
+          ? undefined
+          : (orderType ?? undefined)
+        : "PROJECT",
       paymentOpen:
         paymentState === "OPEN"
           ? true
@@ -131,6 +137,7 @@ export function OrdersPage() {
       dateFrom,
       dateTo,
       canViewAllOrders,
+      canViewProjectOrders,
     ],
   );
 
@@ -144,10 +151,35 @@ export function OrdersPage() {
     [debouncedItemSearch, cashierId, dateFrom, dateTo],
   );
 
+  const projectFilters = useMemo(
+    () => ({
+      limit: 200,
+      orderNumber: debouncedOrderNumber || undefined,
+      status: status ?? undefined,
+      orderType: "PROJECT" as const,
+      paymentOpen:
+        paymentState === "OPEN"
+          ? true
+          : paymentState === "CLOSED"
+            ? false
+            : undefined,
+      cashierId: cashierId ?? undefined,
+      dateFrom: toIsoDateTime(dateFrom),
+      dateTo: toIsoDateTime(dateTo),
+    }),
+    [debouncedOrderNumber, status, paymentState, cashierId, dateFrom, dateTo],
+  );
+
   const ordersQuery = useQuery({
     queryKey: ["orders", orderFilters],
     queryFn: () => fetchOrders(orderFilters),
     enabled: activeTab === "orders",
+  });
+
+  const projectsQuery = useQuery({
+    queryKey: ["orders", "projects", projectFilters],
+    queryFn: () => fetchOrders(projectFilters),
+    enabled: activeTab === "projects" && canViewAllOrders && canViewProjectOrders,
   });
 
   const itemSalesQuery = useQuery({
@@ -165,14 +197,15 @@ export function OrdersPage() {
     [staffQuery.data],
   );
 
-  const hasOrderFilters =
+  const hasSharedOrderFilters =
     orderNumber.trim() !== "" ||
     status !== null ||
-    orderType !== null ||
     paymentState !== null ||
     cashierId !== null ||
     dateFrom !== "" ||
     dateTo !== "";
+
+  const hasOrderFilters = hasSharedOrderFilters || orderType !== null;
 
   const hasItemFilters =
     itemSearch.trim() !== "" ||
@@ -198,8 +231,239 @@ export function OrdersPage() {
   };
 
   const orders = ordersQuery.data?.orders ?? [];
+  const projects = projectsQuery.data?.orders ?? [];
   const itemSales = itemSalesQuery.data?.items ?? [];
   const itemSummary = itemSalesQuery.data?.summary;
+
+  const downloadOrdersExcel = (rows: Order[], filenamePrefix: string) => {
+    const stamp = new Date().toISOString().slice(0, 10);
+    exportOrdersToExcel(rows, `${filenamePrefix}-${stamp}.xlsx`);
+    notifications.show({
+      color: "green",
+      message: "Excel report downloaded",
+    });
+  };
+
+  const renderOrderHistory = ({
+    rows,
+    loading,
+    fetching,
+    showType,
+    emptyLabel,
+    filePrefix,
+    countNoun,
+  }: {
+    rows: Order[];
+    loading: boolean;
+    fetching: boolean;
+    showType: boolean;
+    emptyLabel: string;
+    filePrefix: string;
+    countNoun: string;
+  }) => {
+    const filtersActive = showType ? hasOrderFilters : hasSharedOrderFilters;
+
+    return (
+      <Stack gap="md">
+        <Group justify="flex-end">
+          <Button
+            variant="light"
+            color="green"
+            leftSection={<IconDownload size={16} />}
+            disabled={rows.length === 0}
+            onClick={() => downloadOrdersExcel(rows, filePrefix)}
+          >
+            Export Excel
+          </Button>
+        </Group>
+
+        <Card withBorder padding="md" radius="md">
+          <Stack gap="md">
+            <TextInput
+              label="Order number"
+              placeholder="Search by order number..."
+              leftSection={<IconSearch size={16} />}
+              value={orderNumber}
+              onChange={(e) => setOrderNumber(e.currentTarget.value)}
+            />
+
+            <Grid>
+              <Grid.Col span={{ base: 12, sm: 6 }}>
+                <TextInput
+                  label="From"
+                  type="datetime-local"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.currentTarget.value)}
+                />
+              </Grid.Col>
+              <Grid.Col span={{ base: 12, sm: 6 }}>
+                <TextInput
+                  label="To"
+                  type="datetime-local"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.currentTarget.value)}
+                />
+              </Grid.Col>
+              <Grid.Col span={{ base: 12, sm: 6, md: 4 }}>
+                <Select
+                  label="Order status"
+                  placeholder="All statuses"
+                  clearable
+                  data={[...ORDER_STATUSES]}
+                  value={status}
+                  onChange={setStatus}
+                />
+              </Grid.Col>
+              {showType ? (
+                <Grid.Col span={{ base: 12, sm: 6, md: 4 }}>
+                  <Select
+                    label="Type"
+                    placeholder="All types"
+                    clearable
+                        data={ORDER_TYPES.filter(
+                          (type) => canViewProjectOrders || type.value !== "PROJECT",
+                        )}
+                    value={orderType}
+                    onChange={(value) => setOrderType((value as OrderType | null) ?? null)}
+                  />
+                </Grid.Col>
+              ) : null}
+              <Grid.Col span={{ base: 12, sm: 6, md: 4 }}>
+                <Select
+                  label="Payment status"
+                  placeholder="All payment statuses"
+                  clearable
+                  data={[...PAYMENT_STATES]}
+                  value={paymentState}
+                  onChange={(value) =>
+                    setPaymentState((value as "OPEN" | "CLOSED" | null) ?? null)
+                  }
+                />
+              </Grid.Col>
+              <Grid.Col span={{ base: 12, sm: 6, md: 4 }}>
+                <Select
+                  label="Cashier"
+                  placeholder="All cashiers"
+                  clearable
+                  searchable
+                  data={cashierOptions}
+                  value={cashierId}
+                  onChange={setCashierId}
+                />
+              </Grid.Col>
+            </Grid>
+
+            {filtersActive ? (
+              <Group justify="space-between">
+                <Text size="sm" c="dimmed">
+                  {fetching
+                    ? "Updating results..."
+                    : `${rows.length} ${countNoun} found`}
+                </Text>
+                <Button
+                  variant="subtle"
+                  color="gray"
+                  size="xs"
+                  leftSection={<IconX size={14} />}
+                  onClick={clearOrderFilters}
+                >
+                  Clear filters
+                </Button>
+              </Group>
+            ) : null}
+          </Stack>
+        </Card>
+
+        {loading ? (
+          <Loader color="green" />
+        ) : (
+          <Card withBorder padding={0} radius="md">
+            <Table striped highlightOnHover>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Order #</Table.Th>
+                  <Table.Th>Date</Table.Th>
+                  <Table.Th>Type</Table.Th>
+                  <Table.Th>Payment status</Table.Th>
+                  <Table.Th>Cashier</Table.Th>
+                  <Table.Th>Method</Table.Th>
+                  <Table.Th>Order status</Table.Th>
+                  <Table.Th ta="right">Total</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {rows.map((order) => {
+                  const paymentStateValue = orderPaymentState(order);
+                  const typeValue = orderTypeOf(order);
+
+                  return (
+                    <Table.Tr
+                      key={order.id}
+                      style={{ cursor: "pointer" }}
+                      onClick={() => {
+                        if (typeValue !== "PROJECT" && !canViewAllOrders) {
+                          notifications.show({
+                            color: "red",
+                            message: "You do not have permission to view this order",
+                          });
+                          return;
+                        }
+                        if (typeValue === "PROJECT" && !canOpenProjects && !canViewAllOrders) {
+                          notifications.show({
+                            color: "red",
+                            message: "You do not have permission to open this project",
+                          });
+                          return;
+                        }
+                        navigate(`/orders/${order.id}`);
+                      }}
+                    >
+                      <Table.Td>
+                        <Text fw={600}>{order.orderNumber}</Text>
+                        {order.projectTitle ? (
+                          <Text size="xs" c="dimmed">
+                            {order.projectTitle}
+                          </Text>
+                        ) : null}
+                      </Table.Td>
+                      <Table.Td>{formatDate(order.completedAt ?? order.createdAt)}</Table.Td>
+                      <Table.Td>
+                        <Badge variant="light" color={typeValue === "PROJECT" ? "grape" : "gray"}>
+                          {orderTypeLabel(typeValue)}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>
+                        <Badge variant="light" color={orderPaymentStateColor(paymentStateValue)}>
+                          {orderPaymentStateLabel(paymentStateValue)}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td>{order.cashier?.name ?? "—"}</Table.Td>
+                      <Table.Td>
+                        {order.payments?.[0] ? paymentLabel(order.payments[0].method) : "—"}
+                      </Table.Td>
+                      <Table.Td>
+                        <Badge variant="light" color={statusColor(order.status)}>
+                          {orderStatusLabel(order.status)}
+                        </Badge>
+                      </Table.Td>
+                      <Table.Td ta="right">
+                        <Text fw={600}>{formatMoney(order.total, store!.currency)}</Text>
+                      </Table.Td>
+                    </Table.Tr>
+                  );
+                })}
+              </Table.Tbody>
+            </Table>
+            {rows.length === 0 ? (
+              <Text c="dimmed" ta="center" py="xl">
+                {emptyLabel}
+              </Text>
+            ) : null}
+          </Card>
+        )}
+      </Stack>
+    );
+  };
 
   return (
     <Stack gap="lg">
@@ -207,7 +471,7 @@ export function OrdersPage() {
         <Title order={2}>{canViewAllOrders ? "Orders" : "Projects"}</Title>
         <Text c="dimmed">
           {canViewAllOrders
-            ? "Sales history and item reports"
+            ? "Sales history, project orders, and item reports"
             : "Projects only. The full order list needs the View orders permission."}
         </Text>
       </div>
@@ -215,209 +479,39 @@ export function OrdersPage() {
       <Tabs value={activeTab} onChange={setActiveTab}>
         <Tabs.List>
           <Tabs.Tab value="orders">{canViewAllOrders ? "Orders" : "Projects"}</Tabs.Tab>
+          {canViewAllOrders && canViewProjectOrders ? (
+            <Tabs.Tab value="projects">Projects</Tabs.Tab>
+          ) : null}
           {canViewAllOrders && canViewItemSales ? (
             <Tabs.Tab value="item-sales">Items sales</Tabs.Tab>
           ) : null}
         </Tabs.List>
 
         <Tabs.Panel value="orders" pt="md">
-          <Stack gap="md">
-            <Card withBorder padding="md" radius="md">
-              <Stack gap="md">
-                <TextInput
-                  label="Order number"
-                  placeholder="Search by order number..."
-                  leftSection={<IconSearch size={16} />}
-                  value={orderNumber}
-                  onChange={(e) => setOrderNumber(e.currentTarget.value)}
-                />
-
-                <Grid>
-                  <Grid.Col span={{ base: 12, sm: 6 }}>
-                    <TextInput
-                      label="From"
-                      type="datetime-local"
-                      value={dateFrom}
-                      onChange={(e) => setDateFrom(e.currentTarget.value)}
-                    />
-                  </Grid.Col>
-                  <Grid.Col span={{ base: 12, sm: 6 }}>
-                    <TextInput
-                      label="To"
-                      type="datetime-local"
-                      value={dateTo}
-                      onChange={(e) => setDateTo(e.currentTarget.value)}
-                    />
-                  </Grid.Col>
-                  <Grid.Col span={{ base: 12, sm: 6, md: 4 }}>
-                    <Select
-                      label="Order status"
-                      placeholder="All statuses"
-                      clearable
-                      data={[...ORDER_STATUSES]}
-                      value={status}
-                      onChange={setStatus}
-                    />
-                  </Grid.Col>
-                  {canViewAllOrders ? (
-                    <Grid.Col span={{ base: 12, sm: 6, md: 4 }}>
-                      <Select
-                        label="Type"
-                        placeholder="All types"
-                        clearable
-                        data={[...ORDER_TYPES]}
-                        value={orderType}
-                        onChange={(value) => setOrderType((value as OrderType | null) ?? null)}
-                      />
-                    </Grid.Col>
-                  ) : null}
-                  <Grid.Col span={{ base: 12, sm: 6, md: 4 }}>
-                    <Select
-                      label="Payment status"
-                      placeholder="All payment statuses"
-                      clearable
-                      data={[...PAYMENT_STATES]}
-                      value={paymentState}
-                      onChange={(value) =>
-                        setPaymentState((value as "OPEN" | "CLOSED" | null) ?? null)
-                      }
-                    />
-                  </Grid.Col>
-                  <Grid.Col span={{ base: 12, sm: 6, md: 4 }}>
-                    <Select
-                      label="Cashier"
-                      placeholder="All cashiers"
-                      clearable
-                      searchable
-                      data={cashierOptions}
-                      value={cashierId}
-                      onChange={setCashierId}
-                    />
-                  </Grid.Col>
-                </Grid>
-
-                {hasOrderFilters ? (
-                  <Group justify="space-between">
-                    <Text size="sm" c="dimmed">
-                      {ordersQuery.isFetching
-                        ? "Updating results..."
-                        : `${orders.length} order(s) found`}
-                    </Text>
-                    <Button
-                      variant="subtle"
-                      color="gray"
-                      size="xs"
-                      leftSection={<IconX size={14} />}
-                      onClick={clearOrderFilters}
-                    >
-                      Clear filters
-                    </Button>
-                  </Group>
-                ) : null}
-              </Stack>
-            </Card>
-
-            {ordersQuery.isLoading ? (
-              <Loader color="green" />
-            ) : (
-              <Card withBorder padding={0} radius="md">
-                <Table striped highlightOnHover>
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>Order #</Table.Th>
-                      <Table.Th>Date</Table.Th>
-                      <Table.Th>Type</Table.Th>
-                      <Table.Th>Payment status</Table.Th>
-                      <Table.Th>Cashier</Table.Th>
-                      <Table.Th>Method</Table.Th>
-                      <Table.Th>Order status</Table.Th>
-                      <Table.Th ta="right">Total</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {orders.map((order) => {
-                      const paymentStateValue = orderPaymentState(order);
-                      const typeValue = orderTypeOf(order);
-
-                      return (
-                      <Table.Tr
-                        key={order.id}
-                        style={{ cursor: "pointer" }}
-                        onClick={() => {
-                          if (typeValue !== "PROJECT" && !canViewAllOrders) {
-                            notifications.show({
-                              color: "red",
-                              message: "You do not have permission to view this order",
-                            });
-                            return;
-                          }
-                          if (typeValue === "PROJECT" && !canOpenProjects && !canViewAllOrders) {
-                            notifications.show({
-                              color: "red",
-                              message: "You do not have permission to open this project",
-                            });
-                            return;
-                          }
-                          navigate(`/orders/${order.id}`);
-                        }}
-                      >
-                        <Table.Td>
-                          <Text fw={600}>{order.orderNumber}</Text>
-                          {order.projectTitle ? (
-                            <Text size="xs" c="dimmed">
-                              {order.projectTitle}
-                            </Text>
-                          ) : null}
-                        </Table.Td>
-                        <Table.Td>
-                          {formatDate(order.completedAt ?? order.createdAt)}
-                        </Table.Td>
-                        <Table.Td>
-                          <Badge
-                            variant="light"
-                            color={typeValue === "PROJECT" ? "grape" : "gray"}
-                          >
-                            {orderTypeLabel(typeValue)}
-                          </Badge>
-                        </Table.Td>
-                        <Table.Td>
-                          <Badge
-                            variant="light"
-                            color={orderPaymentStateColor(paymentStateValue)}
-                          >
-                            {orderPaymentStateLabel(paymentStateValue)}
-                          </Badge>
-                        </Table.Td>
-                        <Table.Td>{order.cashier?.name ?? "—"}</Table.Td>
-                        <Table.Td>
-                          {order.payments?.[0]
-                            ? paymentLabel(order.payments[0].method)
-                            : "—"}
-                        </Table.Td>
-                        <Table.Td>
-                          <Badge variant="light" color={statusColor(order.status)}>
-                            {orderStatusLabel(order.status)}
-                          </Badge>
-                        </Table.Td>
-                        <Table.Td ta="right">
-                          <Text fw={600}>
-                            {formatMoney(order.total, store!.currency)}
-                          </Text>
-                        </Table.Td>
-                      </Table.Tr>
-                      );
-                    })}
-                  </Table.Tbody>
-                </Table>
-                {orders.length === 0 ? (
-                  <Text c="dimmed" ta="center" py="xl">
-                    No orders match your filters
-                  </Text>
-                ) : null}
-              </Card>
-            )}
-          </Stack>
+          {renderOrderHistory({
+            rows: orders,
+            loading: ordersQuery.isLoading,
+            fetching: ordersQuery.isFetching,
+            showType: canViewAllOrders,
+            emptyLabel: "No orders match your filters",
+            filePrefix: canViewAllOrders ? "orders" : "projects",
+            countNoun: canViewAllOrders ? "order(s)" : "project order(s)",
+          })}
         </Tabs.Panel>
+
+        {canViewAllOrders && canViewProjectOrders ? (
+          <Tabs.Panel value="projects" pt="md">
+            {renderOrderHistory({
+              rows: projects,
+              loading: projectsQuery.isLoading,
+              fetching: projectsQuery.isFetching,
+              showType: false,
+              emptyLabel: "No project orders match your filters",
+              filePrefix: "project-orders",
+              countNoun: "project order(s)",
+            })}
+          </Tabs.Panel>
+        ) : null}
 
         <Tabs.Panel value="item-sales" pt="md">
           <Stack gap="md">
