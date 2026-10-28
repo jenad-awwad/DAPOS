@@ -144,7 +144,7 @@ export function ProductDetailPage() {
             <Button
               color="green"
               leftSection={<IconShoppingCart size={18} />}
-              disabled={product.onStock < 1 || !product.isPriced}
+              disabled={!product.isPriced}
               onClick={() => addProduct(product)}
               w="fit-content"
             >

@@ -79,9 +79,6 @@ export async function createSale(input: CreateOrderInput) {
       if (item.quantity <= 0) {
         throw new AppError("Quantity must be greater than zero");
       }
-      if (product.onStock < item.quantity) {
-        throw new AppError(`Insufficient stock for ${product.name}`);
-      }
       if (!product.isPriced) {
         throw new AppError(`${product.name} is not priced yet`);
       }
@@ -175,12 +172,11 @@ export async function createSale(input: CreateOrderInput) {
         where: {
           id: line.productId,
           storeId: input.storeId,
-          onStock: { gte: line.quantity },
         },
         data: { onStock: { decrement: line.quantity } },
       });
       if (res.count !== 1) {
-        throw new AppError(`Insufficient stock for ${line.productName}`);
+        throw new AppError(`Product not found: ${line.productName}`);
       }
       const { onStock: stockAfter } = await tx.product.findUniqueOrThrow({
         where: { id: line.productId },

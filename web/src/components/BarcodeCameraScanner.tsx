@@ -466,7 +466,6 @@ export function BarcodeCameraScanner({
                 label="Qty"
                 size="sm"
                 min={1}
-                max={line.maxQuantity}
                 value={line.quantity}
                 onChange={(value) => onQuantityChange(Number(value) || 1)}
               />

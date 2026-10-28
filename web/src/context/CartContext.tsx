@@ -1,3 +1,4 @@
+import { notifications } from "@mantine/notifications";
 import {
   createContext,
   useContext,
@@ -20,21 +21,31 @@ type CartContextValue = {
 
 const CartContext = createContext<CartContextValue | null>(null);
 
+function notifyStockShort(name: string, onStock: number, previous: number, next: number) {
+  if (next <= onStock || previous > onStock) return;
+  notifications.show({
+    color: "yellow",
+    message: onStock < 1 ? `${name} has no stock` : `${name} has only ${onStock} in stock`,
+  });
+}
+
 export function CartProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([]);
 
   const addProduct = (product: Product) => {
+    const existing = items.find((item) => item.product.id === product.id);
+    const previous = existing?.quantity ?? 0;
+    const next = previous + 1;
+    notifyStockShort(product.name, product.onStock, previous, next);
     setItems((current) => {
-      const existing = current.find((item) => item.product.id === product.id);
-      if (existing) {
-        if (existing.quantity >= product.onStock) return current;
+      const already = current.find((item) => item.product.id === product.id);
+      if (already) {
         return current.map((item) =>
           item.product.id === product.id
             ? { ...item, quantity: item.quantity + 1 }
             : item,
         );
       }
-      if (product.onStock < 1) return current;
       return [...current, { product, quantity: 1, unitPrice: Number(product.price) || 0 }];
     });
   };
@@ -47,14 +58,13 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
   const setQuantity = (productId: string, quantity: number) => {
     const nextQuantity = Number(quantity);
+    const next = Math.max(0, Number.isFinite(nextQuantity) ? nextQuantity : 1);
+    const existing = items.find((item) => item.product.id === productId);
+    if (existing) notifyStockShort(existing.product.name, existing.product.onStock, existing.quantity, next);
     setItems((current) =>
       current
         .map((item) => {
           if (item.product.id !== productId) return item;
-          const next = Math.max(
-            0,
-            Math.min(Number.isFinite(nextQuantity) ? nextQuantity : 1, item.product.onStock),
-          );
           return { ...item, quantity: next };
         })
         .filter((item) => item.quantity > 0),

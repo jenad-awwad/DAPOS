@@ -171,16 +171,24 @@ export function PosPage() {
     }
     try {
       const { product } = await fetchProductByBarcode(code);
+      const previous = items.find((item) => item.product.id === product.id)?.quantity ?? 0;
       addProduct(product);
       setLastScannedId(product.id);
       setBarcode("");
+      const next = previous + 1;
+      const stockNote =
+        next > product.onStock
+          ? product.onStock < 1
+            ? " No stock."
+            : ` Only ${product.onStock} in stock.`
+          : "";
       if (announce) {
         notifications.show({
           color: "green",
           message: `Added ${product.name}`,
         });
       }
-      return { ok: true, message: `Added ${product.name}` };
+      return { ok: true, message: `Added ${product.name}.${stockNote}` };
     } catch (err) {
       const message = err instanceof Error ? err.message : "Product not found";
       if (announce) notifications.show({ color: "red", message });
@@ -486,7 +494,6 @@ export function PosPage() {
                             size="xs"
                             w={72}
                             min={1}
-                            max={item.product.onStock}
                             value={item.quantity}
                             onChange={(v) => setQuantity(item.product.id, Number(v) || 1)}
                             hideControls
@@ -775,7 +782,6 @@ function SimpleProductGrid({
           key={product.id}
           type="button"
           className="pos-photo-tile"
-          disabled={product.onStock < 1}
           onClick={() => onAdd(product)}
         >
           <img

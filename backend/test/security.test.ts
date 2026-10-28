@@ -362,7 +362,7 @@ describe("sales integrity", () => {
     expect(discount.status).toBe(400);
   });
 
-  it("sells one of two parallel checkouts and keeps distinct order numbers", async () => {
+  it("completes parallel checkouts and keeps distinct order numbers", async () => {
     const store = await createStore();
     const { user } = await createUser(store.id, { role: "ADMIN" });
     const token = await tokenFor(user);
@@ -375,11 +375,11 @@ describe("sales integrity", () => {
       api("POST", "/orders", { token, body }),
       api("POST", "/orders", { token, body }),
     ]);
-    const statuses = [first.status, second.status].sort();
-    expect(statuses).toEqual([201, 400]);
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
     const saved = await prisma.product.findUniqueOrThrow({ where: { id: product.id } });
-    expect(saved.onStock).toBe(0);
-    expect(await prisma.stockMovement.count({ where: { type: "SALE" } })).toBe(1);
+    expect(saved.onStock).toBe(-1);
+    expect(await prisma.stockMovement.count({ where: { type: "SALE" } })).toBe(2);
 
     const plenty = await createPricedProduct(store.id, { onStock: 30, barcode: "plenty" });
     const results = await Promise.all(
