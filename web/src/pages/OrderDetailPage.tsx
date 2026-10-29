@@ -12,7 +12,7 @@ import {
   Title,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { IconArrowLeft, IconBan, IconCash, IconPrinter } from "@tabler/icons-react";
+import { IconArrowLeft, IconBan, IconBrandWhatsapp, IconCash, IconPrinter } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { ProjectPartialPayments } from "../components/ProjectPartialPayments";
@@ -27,6 +27,7 @@ import {
   orderTypeLabel,
   paymentLabel,
 } from "../lib/format";
+import { customerInvoiceText, whatsAppShareUrl } from "../lib/customerInvoice";
 import { projectBalanceDue, projectIsFullyPaid, projectPaidTotal } from "../lib/projectPayments";
 
 export function OrderDetailPage() {
@@ -95,6 +96,7 @@ export function OrderDetailPage() {
       <Group justify="space-between">
         <div>
           <Button
+            className="no-print"
             component={Link}
             to="/orders"
             variant="subtle"
@@ -124,6 +126,7 @@ export function OrderDetailPage() {
           ) : null}
           {canVoidOrders && order.status === "COMPLETED" ? (
             <Button
+              className="no-print"
               color="red"
               variant="light"
               leftSection={<IconBan size={16} />}
@@ -133,12 +136,34 @@ export function OrderDetailPage() {
               Void order
             </Button>
           ) : null}
+          {order.orderType === "PROJECT" ? (
+            <Button
+              className="no-print"
+              variant="light"
+              color="green"
+              leftSection={<IconBrandWhatsapp size={16} />}
+              onClick={() => {
+                const text = customerInvoiceText(store!.name, store!.currency, order);
+                const url = whatsAppShareUrl(order.customer?.phone, text);
+                window.open(url, "_blank", "noopener,noreferrer");
+                if (!order.customer?.phone) {
+                  notifications.show({
+                    color: "yellow",
+                    message: "No customer phone on this project. Choose the chat in WhatsApp.",
+                  });
+                }
+              }}
+            >
+              WhatsApp invoice
+            </Button>
+          ) : null}
           <Button
+            className="no-print"
             variant="light"
             leftSection={<IconPrinter size={16} />}
             onClick={() => window.print()}
           >
-            Print receipt
+            {order.orderType === "PROJECT" ? "Print invoice" : "Print receipt"}
           </Button>
         </Group>
       </Group>
@@ -174,47 +199,13 @@ export function OrderDetailPage() {
           <Divider />
 
           {order.orderType === "PROJECT" ? (
-            <>
-              <Group justify="space-between">
-                <Text fw={600}>Customer price</Text>
-                <Text>
-                  {order.projectSellQuantity ?? 1} ×{" "}
-                  {formatMoney(order.projectSellUnitPrice ?? 0, store!.currency)}
-                </Text>
-              </Group>
-              <Text fw={600} mb="xs">
-                Material cost breakdown (internal)
+            <Group justify="space-between">
+              <Text fw={600}>Customer price</Text>
+              <Text>
+                {order.projectSellQuantity ?? 1} ×{" "}
+                {formatMoney(order.projectSellUnitPrice ?? 0, store!.currency)}
               </Text>
-              <Table>
-                <Table.Thead>
-                  <Table.Tr>
-                    <Table.Th>Material</Table.Th>
-                    <Table.Th>Vendor</Table.Th>
-                    <Table.Th ta="center">Qty</Table.Th>
-                    <Table.Th ta="right">Unit cost</Table.Th>
-                    <Table.Th ta="right">Line total</Table.Th>
-                  </Table.Tr>
-                </Table.Thead>
-                <Table.Tbody>
-                  {(order.projectMaterials ?? []).map((material) => (
-                    <Table.Tr key={material.id}>
-                      <Table.Td>
-                        <Text fw={500}>{material.description}</Text>
-                      </Table.Td>
-                      <Table.Td>{material.vendor}</Table.Td>
-                      <Table.Td ta="center">{material.quantity}</Table.Td>
-                      <Table.Td ta="right">
-                        {formatMoney(material.unitCost, store!.currency)}
-                      </Table.Td>
-                      <Table.Td ta="right">
-                        {formatMoney(material.lineTotal, store!.currency)}
-                      </Table.Td>
-                    </Table.Tr>
-                  ))}
-                </Table.Tbody>
-              </Table>
-              <Divider />
-            </>
+            </Group>
           ) : (
           <Table>
             <Table.Thead>
@@ -250,20 +241,7 @@ export function OrderDetailPage() {
           <Divider />
 
           <Stack gap={6}>
-            {order.orderType === "PROJECT" ? (
-              <>
-                <Group justify="space-between">
-                  <Text c="dimmed">Material cost (internal)</Text>
-                  <Text>{formatMoney(order.subtotal, store!.currency)}</Text>
-                </Group>
-                <Group justify="space-between">
-                  <Text c="dimmed">Estimated margin</Text>
-                  <Text c={order.total - order.subtotal >= 0 ? "teal" : "red"}>
-                    {formatMoney(order.total - order.subtotal, store!.currency)}
-                  </Text>
-                </Group>
-              </>
-            ) : (
+            {order.orderType === "PROJECT" ? null : (
               <Group justify="space-between">
                 <Text c="dimmed">Subtotal</Text>
                 <Text>{formatMoney(order.subtotal, store!.currency)}</Text>
@@ -342,8 +320,13 @@ export function OrderDetailPage() {
         </Stack>
       </Card>
 
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+        }
+      `}</style>
       {isOpenProject ? (
-        <Card withBorder padding="lg" radius="md" maw={720}>
+        <Card className="no-print" withBorder padding="lg" radius="md" maw={720}>
           <Group justify="space-between" mb="sm">
             <Title order={4}>Partial payments</Title>
             <Button

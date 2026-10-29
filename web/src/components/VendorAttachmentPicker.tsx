@@ -1,4 +1,4 @@
-import { Button, Group, Image, Stack, Text } from "@mantine/core";
+import { Anchor, Button, Group, Image, Modal, Stack, Text } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import { IconCamera, IconPhoto } from "@tabler/icons-react";
 import { useRef, useState } from "react";
@@ -19,16 +19,19 @@ type VendorAttachmentPickerProps = {
   previewUrl: string | null;
   onUploaded: (key: string, previewUrl: string) => void;
   onClear: () => void;
+  readOnly?: boolean;
 };
 
 export function VendorAttachmentPicker({
   previewUrl,
   onUploaded,
   onClear,
+  readOnly = false,
 }: VendorAttachmentPickerProps) {
   const galleryRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
+  const [opened, setOpened] = useState(false);
 
   const handleFiles = async (files: FileList | null) => {
     const file = files?.[0];
@@ -76,14 +79,35 @@ export function VendorAttachmentPicker({
           alt="Attachment preview"
           h={160}
           w="100%"
-          fit="cover"
+          fit="contain"
           radius="md"
+          style={{ cursor: "pointer" }}
+          onClick={() => setOpened(true)}
         />
       ) : (
         <Text size="sm" c="dimmed">
-          Optional. Upload a photo or take one with the camera.
+          {readOnly
+            ? "No picture attached."
+            : "Optional. Upload a photo or take one with the camera."}
         </Text>
       )}
+      {previewUrl ? (
+        <Button variant="subtle" size="compact-sm" onClick={() => setOpened(true)}>
+          Open picture
+        </Button>
+      ) : null}
+      <Modal opened={opened} onClose={() => setOpened(false)} title="Attachment" size="lg">
+        {previewUrl ? (
+          <Stack gap="sm">
+            <Image src={previewUrl} alt="Attachment" fit="contain" mah={560} />
+            <Anchor href={previewUrl} target="_blank" rel="noreferrer">
+              Open picture in a new tab
+            </Anchor>
+          </Stack>
+        ) : null}
+      </Modal>
+      {readOnly ? null : (
+      <>
       <Group>
         <Button
           variant="light"
@@ -130,6 +154,8 @@ export function VendorAttachmentPicker({
           e.target.value = "";
         }}
       />
+      </>
+      )}
     </Stack>
   );
 }

@@ -1,7 +1,8 @@
 import type { UserRole } from "@prisma/client";
 
 /** Stored beside permission keys once an administrator saves a role on the new catalog. */
-export const PERMISSION_REVISION = "_v4";
+export const PERMISSION_REVISION = "_v5";
+const PERMISSION_REVISION_V4 = "_v4";
 const PERMISSION_REVISION_V3 = "_v3";
 const PERMISSION_REVISION_V2 = "_v2";
 
@@ -13,6 +14,13 @@ export const PERMISSION_KEYS = [
   "pos.loyalty",
   "pos.payments.other",
   "pos.projects",
+  "pos.projects.intake.view",
+  "pos.projects.intake.edit",
+  "pos.projects.materials.view",
+  "pos.projects.materials.edit",
+  "pos.projects.materials.price",
+  "pos.projects.pricing.view",
+  "pos.projects.pricing.edit",
   "calendar.view",
   "calendar.manage",
   "orders.view",
@@ -62,6 +70,48 @@ export const PERMISSION_CATALOG: PermissionDefinition[] = [
     detail: true,
   },
   { key: "pos.projects", label: "Projects", group: "POS" },
+  {
+    key: "pos.projects.intake.view",
+    label: "Phase 1 — review project details",
+    group: "POS",
+    detail: true,
+  },
+  {
+    key: "pos.projects.intake.edit",
+    label: "Phase 1 — add project details",
+    group: "POS",
+    detail: true,
+  },
+  {
+    key: "pos.projects.materials.view",
+    label: "Phase 2 — review materials",
+    group: "POS",
+    detail: true,
+  },
+  {
+    key: "pos.projects.materials.edit",
+    label: "Phase 2 — add materials",
+    group: "POS",
+    detail: true,
+  },
+  {
+    key: "pos.projects.materials.price",
+    label: "Phase 2 — set material prices",
+    group: "POS",
+    detail: true,
+  },
+  {
+    key: "pos.projects.pricing.view",
+    label: "Phase 3 — review customer price and schedule",
+    group: "POS",
+    detail: true,
+  },
+  {
+    key: "pos.projects.pricing.edit",
+    label: "Phase 3 — add customer price and schedule",
+    group: "POS",
+    detail: true,
+  },
   { key: "calendar.view", label: "View calendar", group: "Operations" },
   { key: "calendar.manage", label: "Edit calendar", group: "Operations", detail: true },
   { key: "orders.view", label: "View orders", group: "Operations" },
@@ -122,6 +172,13 @@ const PERMISSION_REQUIRES: Partial<Record<PermissionKey, PermissionKey>> = {
   "pos.price": "pos.sales",
   "pos.loyalty": "pos.sales",
   "pos.payments.other": "pos.sales",
+  "pos.projects.intake.view": "pos.projects",
+  "pos.projects.intake.edit": "pos.projects.intake.view",
+  "pos.projects.materials.view": "pos.projects",
+  "pos.projects.materials.edit": "pos.projects.materials.view",
+  "pos.projects.materials.price": "pos.projects.materials.view",
+  "pos.projects.pricing.view": "pos.projects",
+  "pos.projects.pricing.edit": "pos.projects.pricing.view",
   "calendar.manage": "calendar.view",
   "orders.projects": "orders.view",
   "orders.items": "orders.view",
@@ -161,11 +218,13 @@ export function readStoredPermissions(value: unknown): {
   const strings = value.filter((item): item is string => typeof item === "string");
   const revision = strings.includes(PERMISSION_REVISION)
     ? PERMISSION_REVISION
-    : strings.includes(PERMISSION_REVISION_V3)
-      ? PERMISSION_REVISION_V3
-      : strings.includes(PERMISSION_REVISION_V2)
-        ? PERMISSION_REVISION_V2
-        : undefined;
+    : strings.includes(PERMISSION_REVISION_V4)
+      ? PERMISSION_REVISION_V4
+      : strings.includes(PERMISSION_REVISION_V3)
+        ? PERMISSION_REVISION_V3
+        : strings.includes(PERMISSION_REVISION_V2)
+          ? PERMISSION_REVISION_V2
+          : undefined;
   return {
     configured: revision === PERMISSION_REVISION,
     keys: strings.filter(isPermissionKey),
@@ -173,11 +232,30 @@ export function readStoredPermissions(value: unknown): {
   };
 }
 
+const PROJECT_PHASE_KEYS: PermissionKey[] = [
+  "pos.projects.intake.view",
+  "pos.projects.intake.edit",
+  "pos.projects.materials.view",
+  "pos.projects.materials.edit",
+  "pos.projects.materials.price",
+  "pos.projects.pricing.view",
+  "pos.projects.pricing.edit",
+];
+
+/** People who already had Projects keep every phase until an administrator saves the role again. */
+function grantLegacyProjectPhases(keys: Set<PermissionKey>) {
+  if (!keys.has("pos.projects")) return;
+  for (const key of PROJECT_PHASE_KEYS) keys.add(key);
+}
+
 export function implyDependencies(permissions: PermissionKey[]): PermissionKey[] {
   const next = new Set(permissions);
   for (const key of permissions) {
-    const parent = PERMISSION_REQUIRES[key];
-    if (parent) next.add(parent);
+    let parent = PERMISSION_REQUIRES[key];
+    while (parent) {
+      next.add(parent);
+      parent = PERMISSION_REQUIRES[parent];
+    }
   }
   return [...next];
 }
@@ -217,6 +295,7 @@ function expandLegacy(role: UserRole | null, keys: PermissionKey[]): PermissionK
     for (const key of withVendors) next.add(key);
   }
 
+  grantLegacyProjectPhases(next);
   return implyDependencies([...next]);
 }
 
@@ -227,6 +306,11 @@ export function parsePermissionList(
   const stored = readStoredPermissions(value);
   if (!stored) return null;
   if (stored.configured) return implyDependencies(stored.keys);
+  if (stored.revision === PERMISSION_REVISION_V4) {
+    const next = new Set(stored.keys);
+    grantLegacyProjectPhases(next);
+    return implyDependencies([...next]);
+  }
   if (
     stored.revision === PERMISSION_REVISION_V3 ||
     stored.revision === PERMISSION_REVISION_V2
@@ -238,6 +322,7 @@ export function parsePermissionList(
       next.add("products.price");
       next.add("products.view");
     }
+    grantLegacyProjectPhases(next);
     return implyDependencies([...next]);
   }
   return expandLegacy(role ?? null, stored.keys);

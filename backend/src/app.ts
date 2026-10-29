@@ -45,7 +45,12 @@ function corsOrigins(): string[] | null {
     console.warn("CORS_ORIGINS is unset; allowing every origin until it is configured");
     return null;
   }
-  return ["http://localhost:5173", "http://localhost:8081"];
+  return [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
+  ];
 }
 
 function maxBodyBytes(path: string): number {
@@ -116,10 +121,11 @@ app.notFound((c) => c.json({ error: "Not found" }, 404));
 
 
 app.onError((err, c) => {
-
   console.error(err);
-
-  return c.json({ error: "Internal server error" }, 500);
-
+  if (process.env.NODE_ENV === "production") {
+    return c.json({ error: "Internal server error" }, 500);
+  }
+  const message = err instanceof Error ? err.message : "Internal server error";
+  return c.json({ error: message }, 500);
 });
 

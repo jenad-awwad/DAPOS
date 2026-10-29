@@ -4,6 +4,7 @@ import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -12,6 +13,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { customerInvoiceText, whatsAppShareUrl } from "../../lib/customerInvoice";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "../../context/AuthContext";
 import {
@@ -140,9 +142,16 @@ export default function ProjectDetailScreen() {
   const due = balanceDue(order);
   const paid = paidTotal(order);
   const isOpen = order.status === "OPEN";
-  const materials = order.projectMaterials ?? [];
   const qty = order.projectSellQuantity ?? 1;
   const unitPrice = order.projectSellUnitPrice ?? 0;
+
+  const shareInvoice = () => {
+    const text = customerInvoiceText(store?.name ?? "Invoice", currency, order);
+    const url = whatsAppShareUrl(order.customer?.phone, text);
+    Linking.openURL(url).catch(() => {
+      Alert.alert("WhatsApp", "Could not open WhatsApp.");
+    });
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -193,29 +202,14 @@ export default function ProjectDetailScreen() {
               <Row label="Unit price" value={formatMoney(unitPrice, currency)} />
               <Row label="Discount" value={formatMoney(order.discountTotal, currency)} />
               <Row label="Customer total" value={formatMoney(order.total, currency)} strong />
+              <Row label="Paid" value={formatMoney(paid, currency)} />
+              <Row label="Balance due" value={formatMoney(due, currency)} />
             </View>
 
-            <View style={styles.card}>
-              <Text style={styles.section}>Materials (internal)</Text>
-              {materials.length === 0 ? (
-                <Text style={styles.empty}>No materials recorded</Text>
-              ) : (
-                materials.map((line) => (
-                  <View key={line.id} style={styles.material}>
-                    <Text style={styles.materialName}>{line.description}</Text>
-                    <Text style={styles.meta}>
-                      {line.vendor} · {line.quantity} × {formatMoney(line.unitCost, currency)}
-                    </Text>
-                    <Text style={styles.materialTotal}>{formatMoney(line.lineTotal, currency)}</Text>
-                  </View>
-                ))
-              )}
-              <Row label="Material cost" value={formatMoney(order.subtotal, currency)} />
-              <Row
-                label="Estimated margin"
-                value={formatMoney(order.total - order.subtotal, currency)}
-              />
-            </View>
+            <Pressable style={styles.whatsapp} onPress={shareInvoice}>
+              <Ionicons name="logo-whatsapp" size={18} color="#fff" />
+              <Text style={styles.whatsappText}>Send invoice on WhatsApp</Text>
+            </Pressable>
           </>
         ) : (
           <>
@@ -362,6 +356,16 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 10,
   },
+  whatsapp: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    backgroundColor: "#25D366",
+    borderRadius: radii.md,
+    paddingVertical: 14,
+  },
+  whatsappText: { color: "#fff", fontWeight: "800" },
   section: { fontWeight: "800", color: colors.text, fontSize: 16 },
   row: { flexDirection: "row", justifyContent: "space-between", gap: 12 },
   rowLabel: { color: colors.textMuted, fontWeight: "600" },

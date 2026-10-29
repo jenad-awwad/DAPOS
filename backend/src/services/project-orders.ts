@@ -15,6 +15,7 @@ import { nextOrderNumber } from "./order-numbers.js";
 import { syncProjectOrderVendorInvoices } from "./vendors.js";
 
 type ProjectMaterialInput = {
+  id?: string;
   description: string;
   vendor: string;
   quantity: number;
@@ -55,6 +56,10 @@ type UpdateOpenProjectInput = {
   discountTotal?: number;
   scheduleAt?: Date;
   scheduleType?: CalendarEventType;
+  /** Keep stored unit costs. New lines are saved at zero. */
+  preserveUnitCosts?: boolean;
+  /** Change unit costs on the existing lines only. */
+  unitCostsOnly?: boolean;
 };
 
 type SubmitProjectInput = {
@@ -346,9 +351,33 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
       }
 
       const adjustments: string[] = [];
+      let materialsInput = input.materials;
+      if (materialsInput && input.unitCostsOnly) {
+        const costById = new Map(
+          materialsInput
+            .filter((line) => line.id)
+            .map((line) => [line.id as string, line.unitCost]),
+        );
+        materialsInput = order.projectMaterials.map((line) => ({
+          description: line.description,
+          vendor: line.vendor,
+          quantity: line.quantity.toNumber(),
+          unitCost: costById.get(line.id) ?? line.unitCost.toNumber(),
+          notes: line.notes ?? undefined,
+        }));
+      } else if (materialsInput && input.preserveUnitCosts) {
+        const costById = new Map(
+          order.projectMaterials.map((line) => [line.id, line.unitCost.toNumber()]),
+        );
+        materialsInput = materialsInput.map((line) => ({
+          ...line,
+          unitCost: line.id && costById.has(line.id) ? costById.get(line.id)! : 0,
+        }));
+      }
+
       const materialLines =
-        input.materials !== undefined
-          ? buildMaterialLines(input.materials)
+        materialsInput !== undefined
+          ? buildMaterialLines(materialsInput)
           : order.projectMaterials.map((line) => ({
               description: line.description,
               vendor: line.vendor,
@@ -399,7 +428,7 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
         );
       }
 
-      if (input.materials !== undefined) {
+      if (materialsInput !== undefined) {
         adjustments.push(
           `Materials updated (${materialLines.length} line${materialLines.length === 1 ? "" : "s"})`,
         );
@@ -422,7 +451,7 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
         input.customerPhone,
       );
 
-      if (input.materials !== undefined) {
+      if (materialsInput !== undefined) {
         await tx.orderProjectMaterial.deleteMany({ where: { orderId: order.id } });
         if (materialLines.length > 0) {
           await tx.orderProjectMaterial.createMany({

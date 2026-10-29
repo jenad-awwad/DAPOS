@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { router, Stack } from "expo-router";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -93,17 +93,6 @@ export default function NewProjectScreen() {
   const discountPct = Math.min(100, Math.max(0, Number(discountPercent) || 0));
   const discountTotal = Math.round(sellGross * (discountPct / 100) * 100) / 100;
   const customerTotal = Math.round(Math.max(sellGross - discountTotal, 0) * 100) / 100;
-  const materialCostTotal = useMemo(
-    () =>
-      Math.round(
-        materials.reduce(
-          (sum, line) => sum + (Number(line.quantity) || 0) * (Number(line.unitCost) || 0),
-          0,
-        ) * 100,
-      ) / 100,
-    [materials],
-  );
-  const margin = customerTotal - materialCostTotal;
 
   const updateMaterial = (key: string, patch: Partial<MaterialDraft>) => {
     setMaterials((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch } : row)));
@@ -308,16 +297,6 @@ export default function NewProjectScreen() {
         <View style={styles.summaryRow}>
           <Text style={styles.customerTotalLabel}>Customer total</Text>
           <Text style={styles.customerTotal}>{formatMoney(customerTotal, currency)}</Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Material cost</Text>
-          <Text style={styles.summaryValue}>{formatMoney(materialCostTotal, currency)}</Text>
-        </View>
-        <View style={styles.summaryRow}>
-          <Text style={styles.summaryLabel}>Estimated margin</Text>
-          <Text style={[styles.summaryValue, { color: margin >= 0 ? colors.green : colors.danger }]}>
-            {formatMoney(margin, currency)}
-          </Text>
         </View>
       </View>
 

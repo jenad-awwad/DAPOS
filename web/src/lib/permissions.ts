@@ -21,6 +21,48 @@ export const PERMISSION_CATALOG: PermissionDefinition[] = [
     detail: true,
   },
   { key: "pos.projects", label: "Projects", group: "POS" },
+  {
+    key: "pos.projects.intake.view",
+    label: "Phase 1 — review project details",
+    group: "POS",
+    detail: true,
+  },
+  {
+    key: "pos.projects.intake.edit",
+    label: "Phase 1 — add project details",
+    group: "POS",
+    detail: true,
+  },
+  {
+    key: "pos.projects.materials.view",
+    label: "Phase 2 — review materials",
+    group: "POS",
+    detail: true,
+  },
+  {
+    key: "pos.projects.materials.edit",
+    label: "Phase 2 — add materials",
+    group: "POS",
+    detail: true,
+  },
+  {
+    key: "pos.projects.materials.price",
+    label: "Phase 2 — set material prices",
+    group: "POS",
+    detail: true,
+  },
+  {
+    key: "pos.projects.pricing.view",
+    label: "Phase 3 — review customer price and schedule",
+    group: "POS",
+    detail: true,
+  },
+  {
+    key: "pos.projects.pricing.edit",
+    label: "Phase 3 — add customer price and schedule",
+    group: "POS",
+    detail: true,
+  },
   { key: "calendar.view", label: "View calendar", group: "Operations" },
   { key: "calendar.manage", label: "Edit calendar", group: "Operations", detail: true },
   { key: "orders.view", label: "View orders", group: "Operations" },
@@ -53,6 +95,13 @@ const PERMISSION_REQUIRES: Partial<Record<PermissionKey, PermissionKey>> = {
   "pos.price": "pos.sales",
   "pos.loyalty": "pos.sales",
   "pos.payments.other": "pos.sales",
+  "pos.projects.intake.view": "pos.projects",
+  "pos.projects.intake.edit": "pos.projects.intake.view",
+  "pos.projects.materials.view": "pos.projects",
+  "pos.projects.materials.edit": "pos.projects.materials.view",
+  "pos.projects.materials.price": "pos.projects.materials.view",
+  "pos.projects.pricing.view": "pos.projects",
+  "pos.projects.pricing.edit": "pos.projects.pricing.view",
   "calendar.manage": "calendar.view",
   "orders.projects": "orders.view",
   "orders.items": "orders.view",
@@ -74,13 +123,24 @@ export function applyPermissionToggle(
   const next = new Set(current);
   if (checked) {
     next.add(key);
-    const parent = PERMISSION_REQUIRES[key];
-    if (parent) next.add(parent);
-  } else {
-    next.delete(key);
-    for (const [child, parent] of Object.entries(PERMISSION_REQUIRES)) {
-      if (parent === key) next.delete(child as PermissionKey);
+    let parent = PERMISSION_REQUIRES[key];
+    while (parent) {
+      next.add(parent);
+      parent = PERMISSION_REQUIRES[parent];
     }
+  } else {
+    const remove = new Set<PermissionKey>([key]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const [child, parent] of Object.entries(PERMISSION_REQUIRES)) {
+        if (parent && remove.has(parent) && !remove.has(child as PermissionKey)) {
+          remove.add(child as PermissionKey);
+          grew = true;
+        }
+      }
+    }
+    for (const item of remove) next.delete(item);
   }
   return [...next];
 }

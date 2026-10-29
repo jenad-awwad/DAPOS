@@ -24,12 +24,14 @@ type ProjectPartialPaymentsProps = {
   order: Order;
   currency: string;
   onUpdated?: (order: Order) => void;
+  readOnly?: boolean;
 };
 
 export function ProjectPartialPayments({
   order,
   currency,
   onUpdated,
+  readOnly = false,
 }: ProjectPartialPaymentsProps) {
   const queryClient = useQueryClient();
   const [partialAmount, setPartialAmount] = useState<number | "">("");
@@ -102,7 +104,7 @@ export function ProjectPartialPayments({
         </Stack>
       ) : null}
 
-      {balanceDue > 0 ? (
+      {balanceDue > 0 && !readOnly ? (
         <>
           <Divider />
           <NumberInput

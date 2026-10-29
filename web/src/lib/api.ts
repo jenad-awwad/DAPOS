@@ -21,9 +21,29 @@ import type {
 } from "./types";
 import type { PermissionDefinition, RolePoliciesMap } from "./permissions";
 
-const API_URL =
-  import.meta.env.VITE_API_URL ??
-  "https://dapos.up.railway.app";
+function resolveApiUrl(): string {
+  const configured =
+    import.meta.env.VITE_API_URL ?? "https://dapos.up.railway.app";
+  if (typeof window === "undefined") return configured;
+
+  try {
+    const api = new URL(configured);
+    const apiIsLoopback =
+      api.hostname === "localhost" || api.hostname === "127.0.0.1";
+    if (!apiIsLoopback) return configured;
+
+    const pageHost = window.location.hostname;
+    const pageIsLoopback = pageHost === "localhost" || pageHost === "127.0.0.1";
+    // The phone reaches this laptop through USB forwarding on 127.0.0.1.
+    // Android treats "localhost" as IPv6, which that forward does not cover.
+    api.hostname = pageIsLoopback ? "127.0.0.1" : pageHost;
+    return api.origin;
+  } catch {
+    return configured;
+  }
+}
+
+const API_URL = resolveApiUrl();
 
 const TOKEN_KEY = "dapos_token";
 
@@ -533,6 +553,7 @@ export function createProjectOrder(payload: {
   sellQuantity: number;
   sellUnitPrice: number;
   materials?: {
+    id?: string;
     description: string;
     vendor: string;
     quantity: number;
@@ -561,6 +582,7 @@ export function updateProjectOrder(
     sellQuantity: number;
     sellUnitPrice: number;
     materials: {
+      id?: string;
       description: string;
       vendor: string;
       quantity: number;

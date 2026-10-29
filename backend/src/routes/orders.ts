@@ -48,6 +48,7 @@ const createProjectOrderSchema = z.object({
         quantity: z.number().positive(),
         unitCost: z.number().min(0),
         notes: z.string().optional(),
+        id: z.string().min(1).optional(),
       }),
     )
     .optional(),
@@ -62,6 +63,17 @@ const createProjectOrderSchema = z.object({
 });
 
 const updateProjectOrderSchema = createProjectOrderSchema.partial();
+
+type ProjectWrite = z.infer<typeof createProjectOrderSchema>;
+
+function projectPhaseAccess(permissions: PermissionKey[]) {
+  return {
+    intake: userHasPermission(permissions, "pos.projects.intake.edit"),
+    materials: userHasPermission(permissions, "pos.projects.materials.edit"),
+    materialPrice: userHasPermission(permissions, "pos.projects.materials.price"),
+    pricing: userHasPermission(permissions, "pos.projects.pricing.edit"),
+  };
+}
 
 const submitProjectOrderSchema = z.object({}).optional();
 
@@ -290,24 +302,41 @@ orderRoutes.post("/project", requireAuth, requireAnyPermission("pos.projects"), 
     );
   }
 
+  const access = projectPhaseAccess(c.get("permissions"));
+  if (!access.intake) {
+    return c.json({ error: "You do not have permission to add project details" }, 403);
+  }
+
+  const data: ProjectWrite = { ...parsed.data };
+  if (!access.materials) {
+    data.materials = undefined;
+  } else if (!access.materialPrice && data.materials) {
+    data.materials = data.materials.map((line) => ({ ...line, unitCost: 0 }));
+  }
+  if (!access.pricing) {
+    data.sellQuantity = 1;
+    data.sellUnitPrice = 0;
+    data.discountTotal = undefined;
+    data.scheduleAt = undefined;
+    data.scheduleType = undefined;
+  }
+
   try {
     const order = await createOpenProject({
       storeId: auth.storeId,
       cashierId: auth.sub,
-      projectTitle: parsed.data.projectTitle,
-      sellQuantity: parsed.data.sellQuantity,
-      sellUnitPrice: parsed.data.sellUnitPrice,
-      materials: parsed.data.materials,
-      customerId: parsed.data.customerId,
-      customerName: parsed.data.customerName,
-      customerPhone: parsed.data.customerPhone,
-      notes: parsed.data.notes,
-      attachmentKey: parsed.data.attachmentKey,
-      discountTotal: parsed.data.discountTotal,
-      scheduleAt: parsed.data.scheduleAt
-        ? new Date(parsed.data.scheduleAt)
-        : undefined,
-      scheduleType: parsed.data.scheduleType,
+      projectTitle: data.projectTitle,
+      sellQuantity: data.sellQuantity,
+      sellUnitPrice: data.sellUnitPrice,
+      materials: data.materials,
+      customerId: data.customerId,
+      customerName: data.customerName,
+      customerPhone: data.customerPhone,
+      notes: data.notes,
+      attachmentKey: data.attachmentKey,
+      discountTotal: data.discountTotal,
+      scheduleAt: data.scheduleAt ? new Date(data.scheduleAt) : undefined,
+      scheduleType: data.scheduleType,
     });
 
     return c.json({ order: await presentOrder(order, c.req.url) }, 201);
@@ -328,25 +357,50 @@ orderRoutes.patch("/:id/project", requireAuth, requireAnyPermission("pos.project
     );
   }
 
+  const access = projectPhaseAccess(c.get("permissions"));
+  if (!access.intake && !access.materials && !access.materialPrice && !access.pricing) {
+    return c.json({ error: "You can review this project but cannot change it" }, 403);
+  }
+
+  const data = { ...parsed.data };
+  if (!access.intake) {
+    delete data.projectTitle;
+    delete data.customerId;
+    delete data.customerName;
+    delete data.customerPhone;
+    delete data.notes;
+    delete data.attachmentKey;
+  }
+  if (!access.materials && !access.materialPrice) {
+    delete data.materials;
+  }
+  if (!access.pricing) {
+    delete data.sellQuantity;
+    delete data.sellUnitPrice;
+    delete data.discountTotal;
+    delete data.scheduleAt;
+    delete data.scheduleType;
+  }
+
   try {
     const order = await updateOpenProject({
       storeId: auth.storeId,
       orderId: c.req.param("id"),
       userId: auth.sub,
-      projectTitle: parsed.data.projectTitle,
-      sellQuantity: parsed.data.sellQuantity,
-      sellUnitPrice: parsed.data.sellUnitPrice,
-      materials: parsed.data.materials,
-      customerId: parsed.data.customerId,
-      customerName: parsed.data.customerName,
-      customerPhone: parsed.data.customerPhone,
-      notes: parsed.data.notes,
-      attachmentKey: parsed.data.attachmentKey,
-      discountTotal: parsed.data.discountTotal,
-      scheduleAt: parsed.data.scheduleAt
-        ? new Date(parsed.data.scheduleAt)
-        : undefined,
-      scheduleType: parsed.data.scheduleType,
+      projectTitle: data.projectTitle,
+      sellQuantity: data.sellQuantity,
+      sellUnitPrice: data.sellUnitPrice,
+      materials: data.materials,
+      customerId: data.customerId,
+      customerName: data.customerName,
+      customerPhone: data.customerPhone,
+      notes: data.notes,
+      attachmentKey: data.attachmentKey,
+      discountTotal: data.discountTotal,
+      scheduleAt: data.scheduleAt ? new Date(data.scheduleAt) : undefined,
+      scheduleType: data.scheduleType,
+      preserveUnitCosts: access.materials && !access.materialPrice,
+      unitCostsOnly: access.materialPrice && !access.materials,
     });
 
     return c.json({ order: await presentOrder(order, c.req.url) });
@@ -357,6 +411,9 @@ orderRoutes.patch("/:id/project", requireAuth, requireAnyPermission("pos.project
 
 orderRoutes.post("/:id/project/payments", requireAuth, requireAnyPermission("pos.projects"), async (c) => {
   const auth = c.get("auth");
+  if (!userHasPermission(c.get("permissions"), "pos.projects.pricing.edit")) {
+    return c.json({ error: "You do not have permission to add customer price and schedule" }, 403);
+  }
   const body = await c.req.json().catch(() => null);
   const parsed = recordProjectPaymentSchema.safeParse(body);
 
@@ -384,6 +441,9 @@ orderRoutes.post("/:id/project/payments", requireAuth, requireAnyPermission("pos
 
 orderRoutes.post("/:id/project/submit", requireAuth, requireAnyPermission("pos.projects"), async (c) => {
   const auth = c.get("auth");
+  if (!userHasPermission(c.get("permissions"), "pos.projects.pricing.edit")) {
+    return c.json({ error: "You do not have permission to add customer price and schedule" }, 403);
+  }
 
   try {
     const order = await submitOpenProject({
