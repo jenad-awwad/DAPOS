@@ -278,6 +278,8 @@ export function ProjectDetailsPanel({
                   <Table.Th>Order #</Table.Th>
                   <Table.Th>Date</Table.Th>
                   <Table.Th>Customer</Table.Th>
+                  <Table.Th>Material</Table.Th>
+                  <Table.Th>Vendor</Table.Th>
                   <Table.Th>Schedule</Table.Th>
                   <Table.Th>Status</Table.Th>
                   <Table.Th ta="right">Material cost</Table.Th>
@@ -293,6 +295,7 @@ export function ProjectDetailsPanel({
                   const balance = projectBalanceDue(order);
                   const payment = orderPaymentState(order);
                   const open = expandedId === order.id;
+                  const materials = order.projectMaterials ?? [];
                   return (
                     <Fragment key={order.id}>
                       <Table.Tr
@@ -336,6 +339,24 @@ export function ProjectDetailsPanel({
                           ) : null}
                         </Table.Td>
                         <Table.Td>
+                          {materials.length === 0
+                            ? "—"
+                            : materials.map((line) => (
+                                <Text key={line.id} size="sm">
+                                  {line.description}
+                                </Text>
+                              ))}
+                        </Table.Td>
+                        <Table.Td>
+                          {materials.length === 0
+                            ? "—"
+                            : materials.map((line) => (
+                                <Text key={line.id} size="sm">
+                                  {line.vendor}
+                                </Text>
+                              ))}
+                        </Table.Td>
+                        <Table.Td>
                           {schedule ? (
                             <>
                               <Text>{formatDate(schedule.startsAt)}</Text>
@@ -370,7 +391,7 @@ export function ProjectDetailsPanel({
                       </Table.Tr>
                       {open ? (
                         <Table.Tr key={`${order.id}-details`}>
-                          <Table.Td colSpan={9} bg="gray.0">
+                          <Table.Td colSpan={11} bg="gray.0">
                             <Stack gap="sm" py="xs">
                               <Group gap="xl">
                                 <Text size="sm">

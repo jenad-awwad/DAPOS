@@ -39,6 +39,8 @@ export function exportProjectDetailsToExcel(orders: Order[], filename: string) {
       "Project title": order.projectTitle ?? "",
       Customer: order.customer?.name ?? "",
       Phone: order.customer?.phone ?? "",
+      Material: (order.projectMaterials ?? []).map((line) => line.description).join("\n"),
+      Vendor: (order.projectMaterials ?? []).map((line) => line.vendor).join("\n"),
       Cashier: order.cashier?.name ?? "",
       "Order status": orderStatusLabel(order.status),
       "Payment status": orderPaymentStateLabel(orderPaymentState(order)),
@@ -93,7 +95,7 @@ export function exportProjectDetailsToExcel(orders: Order[], filename: string) {
   addSheet(
     projects,
     "Projects",
-    [16, 22, 28, 22, 16, 18, 14, 16, 22, 18, 12, 12, 12, 16, 14, 12, 12, 36],
+    [16, 22, 28, 22, 16, 28, 22, 18, 14, 16, 22, 18, 12, 12, 12, 16, 14, 12, 12, 36],
   );
   addSheet(materials, "Materials", [16, 28, 28, 22, 12, 12, 14, 28]);
   addSheet(history, "Record history", [16, 28, 22, 18, 60]);
