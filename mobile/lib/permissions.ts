@@ -12,9 +12,12 @@ export function permissionMatches(
 function roleFallback(role: UserRole, permission: PermissionKey): boolean {
   if (role === "ADMIN") return true;
   if (role === "MANAGER") {
-    return !["staff.manage", "roles.manage", "settings.manage"].includes(
-      permission,
-    );
+    return ![
+      "staff.manage",
+      "roles.manage",
+      "settings.manage",
+      "orders.projectDetails",
+    ].includes(permission);
   }
   if (permission === "vendors.record") return true;
   return [

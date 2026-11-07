@@ -6,6 +6,7 @@ import {
   Group,
   Image,
   Loader,
+  Modal,
   Stack,
   Table,
   Text,
@@ -14,6 +15,7 @@ import {
 import { notifications } from "@mantine/notifications";
 import { IconArrowLeft, IconBan, IconBrandWhatsapp, IconCash, IconPrinter } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ProjectPartialPayments } from "../components/ProjectPartialPayments";
 import { useAuth } from "../context/AuthContext";
@@ -34,7 +36,14 @@ export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { store } = useAuth();
   const canVoidOrders = useHasPermission("orders.void");
+  const canAdjustDetails = useHasPermission("pos.projects.intake.edit");
+  const canAdjustMaterials =
+    useHasPermission("pos.projects.materials.edit") ||
+    useHasPermission("pos.projects.materials.price");
+  const canAdjustPricing = useHasPermission("pos.projects.pricing.edit");
+  const canAdjustProject = canAdjustDetails || canAdjustMaterials || canAdjustPricing;
   const queryClient = useQueryClient();
+  const [attachmentOpen, setAttachmentOpen] = useState(false);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["order", id],
@@ -192,7 +201,30 @@ export function OrderDetailPage() {
                 w="100%"
                 fit="contain"
                 radius="md"
+                style={{ cursor: "pointer" }}
+                onClick={() => setAttachmentOpen(true)}
               />
+              <Button
+                variant="subtle"
+                size="compact-sm"
+                px={0}
+                onClick={() => setAttachmentOpen(true)}
+              >
+                View photo
+              </Button>
+              <Modal
+                opened={attachmentOpen}
+                onClose={() => setAttachmentOpen(false)}
+                title="Attachment"
+                size="lg"
+              >
+                <Image
+                  src={order.attachmentUrl}
+                  alt="Project attachment"
+                  fit="contain"
+                  mah={560}
+                />
+              </Modal>
             </>
           ) : null}
 
@@ -303,12 +335,21 @@ export function OrderDetailPage() {
           {(order.projectAdjustments ?? []).length > 0 ? (
             <>
               <Divider />
-              <Text fw={600}>Adjustment history</Text>
+              <Text fw={600}>Change history</Text>
               <Stack gap="xs">
                 {(order.projectAdjustments ?? []).map((entry) => (
                   <Card key={entry.id} withBorder padding="sm" radius="md">
-                    <Text size="sm">{entry.note}</Text>
-                    <Text size="xs" c="dimmed">
+                    <Stack gap={2}>
+                      {entry.note.split("; ").map((line, index) => (
+                        <Text key={`${entry.id}-${index}`} size="sm">
+                          {line.replace(
+                            /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g,
+                            (iso) => formatDate(iso),
+                          )}
+                        </Text>
+                      ))}
+                    </Stack>
+                    <Text size="xs" c="dimmed" mt={4}>
                       {formatDate(entry.createdAt)}
                       {entry.user ? ` · ${entry.user.name}` : ""}
                     </Text>
@@ -325,45 +366,55 @@ export function OrderDetailPage() {
           .no-print { display: none !important; }
         }
       `}</style>
-      {isOpenProject ? (
+      {isOpenProject && (canAdjustProject || canAdjustPricing) ? (
         <Card className="no-print" withBorder padding="lg" radius="md" maw={720}>
           <Group justify="space-between" mb="sm">
-            <Title order={4}>Partial payments</Title>
-            <Button
-              component={Link}
-              to={`/pos?edit=${order.id}`}
-              variant="light"
-              size="sm"
-            >
-              Edit project
-            </Button>
+            <Title order={4}>{canAdjustPricing ? "Partial payments" : "Open project"}</Title>
+            {canAdjustProject ? (
+              <Button
+                component={Link}
+                to={`/pos?edit=${order.id}`}
+                variant="light"
+                size="sm"
+              >
+                Edit project
+              </Button>
+            ) : null}
           </Group>
 
-          <ProjectPartialPayments
-            order={order}
-            currency={store!.currency}
-            onUpdated={() => queryClient.invalidateQueries({ queryKey: ["order", id] })}
-          />
+          {canAdjustPricing ? (
+            <>
+              <ProjectPartialPayments
+                order={order}
+                currency={store!.currency}
+                onUpdated={() => queryClient.invalidateQueries({ queryKey: ["order", id] })}
+              />
 
-          <Divider my="md" />
+              <Divider my="md" />
 
-          <Title order={5} mb="sm">
-            Submit project
-          </Title>
-          <Text size="sm" c="dimmed" mb="md">
-            {fullyPaid
-              ? "All payments recorded. Submit to close this project and complete linked calendar activities."
-              : `Record partial payments until the balance is zero (currently ${formatMoney(balanceDue, store!.currency)} due).`}
-          </Text>
-          <Button
-            color="green"
-            leftSection={<IconCash size={16} />}
-            loading={submitMutation.isPending}
-            disabled={!fullyPaid}
-            onClick={() => submitMutation.mutate()}
-          >
-            Submit project
-          </Button>
+              <Title order={5} mb="sm">
+                Submit project
+              </Title>
+              <Text size="sm" c="dimmed" mb="md">
+                {fullyPaid
+                  ? "All payments recorded. Submit to close this project and complete linked calendar activities."
+                  : `Record partial payments until the balance is zero (currently ${formatMoney(balanceDue, store!.currency)} due).`}
+              </Text>
+              <Button
+                color="green"
+                leftSection={<IconCash size={16} />}
+                loading={submitMutation.isPending}
+                disabled={!fullyPaid}
+                onClick={() => submitMutation.mutate()}
+              >
+                Submit project
+              </Button>
+            </>
+          ) : (
+            <Text size="sm" c="dimmed">
+              Open the project to change the phases this account is allowed to edit.
+            </Text>
+          )}
         </Card>
       ) : null}
     </Stack>

@@ -299,6 +299,11 @@ export async function listOrders(
         orderBy: { createdAt: "desc" },
       },
       cashier: { select: { id: true, name: true } },
+      customer: { select: { id: true, name: true, phone: true } },
+      calendarEvents: {
+        select: { id: true, type: true, startsAt: true, status: true },
+        orderBy: { startsAt: "asc" },
+      },
     },
     orderBy: { createdAt: "desc" },
     take: limit,
@@ -318,6 +323,7 @@ export async function getOrder(storeId: string, orderId: string) {
       },
       cashier: { select: { id: true, name: true } },
       customer: true,
+      calendarEvents: { orderBy: { startsAt: "asc" } },
     },
   });
 }

@@ -20,6 +20,7 @@ import { IconDownload, IconSearch, IconX } from "@tabler/icons-react";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ProjectDetailsPanel } from "../components/ProjectDetailsPanel";
 import { useAuth } from "../context/AuthContext";
 import { useHasPermission } from "../hooks/usePermissions";
 import { fetchCashiers, fetchItemSalesReport, fetchOrders } from "../lib/api";
@@ -88,6 +89,7 @@ export function OrdersPage() {
   const canViewAllOrders = useHasPermission("orders.view");
   const canViewProjectOrders = useHasPermission("orders.projects");
   const canViewItemSales = useHasPermission("orders.items");
+  const canViewProjectDetails = useHasPermission("orders.projectDetails");
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<string | null>("orders");
 
@@ -100,6 +102,7 @@ export function OrdersPage() {
   const [dateTo, setDateTo] = useState("");
   const [itemSearch, setItemSearch] = useState("");
 
+  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
   const [debouncedOrderNumber] = useDebouncedValue(orderNumber.trim(), 300);
   const [debouncedItemSearch] = useDebouncedValue(itemSearch.trim(), 300);
 
@@ -182,6 +185,17 @@ export function OrdersPage() {
     enabled: activeTab === "projects" && canViewAllOrders && canViewProjectOrders,
   });
 
+  const projectDetailFilters = useMemo(
+    () => ({ ...projectFilters, limit: 500 }),
+    [projectFilters],
+  );
+
+  const projectDetailsQuery = useQuery({
+    queryKey: ["orders", "project-details", projectDetailFilters],
+    queryFn: () => fetchOrders(projectDetailFilters),
+    enabled: activeTab === "project-details" && canViewAllOrders && canViewProjectDetails,
+  });
+
   const itemSalesQuery = useQuery({
     queryKey: ["item-sales", itemSalesFilters],
     queryFn: () => fetchItemSalesReport(itemSalesFilters),
@@ -232,6 +246,7 @@ export function OrdersPage() {
 
   const orders = ordersQuery.data?.orders ?? [];
   const projects = projectsQuery.data?.orders ?? [];
+  const projectDetails = projectDetailsQuery.data?.orders ?? [];
   const itemSales = itemSalesQuery.data?.items ?? [];
   const itemSummary = itemSalesQuery.data?.summary;
 
@@ -471,7 +486,7 @@ export function OrdersPage() {
         <Title order={2}>{canViewAllOrders ? "Orders" : "Projects"}</Title>
         <Text c="dimmed">
           {canViewAllOrders
-            ? "Sales history, project orders, and item reports"
+            ? "Sales history, project orders, project details, and item reports"
             : "Projects only. The full order list needs the View orders permission."}
         </Text>
       </div>
@@ -481,6 +496,9 @@ export function OrdersPage() {
           <Tabs.Tab value="orders">{canViewAllOrders ? "Orders" : "Projects"}</Tabs.Tab>
           {canViewAllOrders && canViewProjectOrders ? (
             <Tabs.Tab value="projects">Projects</Tabs.Tab>
+          ) : null}
+          {canViewAllOrders && canViewProjectDetails ? (
+            <Tabs.Tab value="project-details">Project details</Tabs.Tab>
           ) : null}
           {canViewAllOrders && canViewItemSales ? (
             <Tabs.Tab value="item-sales">Items sales</Tabs.Tab>
@@ -510,6 +528,37 @@ export function OrdersPage() {
               filePrefix: "project-orders",
               countNoun: "project order(s)",
             })}
+          </Tabs.Panel>
+        ) : null}
+
+        {canViewAllOrders && canViewProjectDetails ? (
+          <Tabs.Panel value="project-details" pt="md">
+            <ProjectDetailsPanel
+              rows={projectDetails}
+              loading={projectDetailsQuery.isLoading}
+              fetching={projectDetailsQuery.isFetching}
+              currency={store!.currency}
+              orderNumber={orderNumber}
+              onOrderNumberChange={setOrderNumber}
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              onDateFromChange={setDateFrom}
+              onDateToChange={setDateTo}
+              status={status}
+              onStatusChange={setStatus}
+              paymentState={paymentState}
+              onPaymentStateChange={setPaymentState}
+              cashierId={cashierId}
+              cashierOptions={cashierOptions}
+              onCashierChange={setCashierId}
+              filtersActive={hasSharedOrderFilters}
+              onClearFilters={clearOrderFilters}
+              expandedId={expandedProjectId}
+              onToggle={(id) =>
+                setExpandedProjectId((current) => (current === id ? null : id))
+              }
+              onOpen={(id) => navigate(`/orders/${id}`)}
+            />
           </Tabs.Panel>
         ) : null}
 

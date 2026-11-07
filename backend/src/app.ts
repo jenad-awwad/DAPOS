@@ -35,7 +35,31 @@ import type { AppEnv } from "./middleware/auth.js";
 
 
 
-function corsOrigins(): string[] | null {
+function devBrowserOrigin(origin: string): string | null {
+  const fixed = new Set([
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
+  ]);
+  if (fixed.has(origin)) return origin;
+  try {
+    const url = new URL(origin);
+    const host = url.hostname;
+    const onThisComputer =
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      host.startsWith("192.168.") ||
+      host.startsWith("10.") ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
+    if (onThisComputer && (url.port === "5173" || url.port === "8081")) return origin;
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function corsOrigins(): string[] | ((origin: string) => string | null) | null {
   const configured = (process.env.CORS_ORIGINS ?? "")
     .split(",")
     .map((origin) => origin.trim())
@@ -45,12 +69,7 @@ function corsOrigins(): string[] | null {
     console.warn("CORS_ORIGINS is unset; allowing every origin until it is configured");
     return null;
   }
-  return [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:8081",
-    "http://127.0.0.1:8081",
-  ];
+  return devBrowserOrigin;
 }
 
 function maxBodyBytes(path: string): number {
@@ -63,7 +82,12 @@ function maxBodyBytes(path: string): number {
 export const app = new Hono<AppEnv>();
 
 const origins = corsOrigins();
-app.use("*", origins ? cors({ origin: origins }) : cors());
+app.use(
+  "*",
+  origins
+    ? cors({ origin: origins })
+    : cors(),
+);
 app.use(
   "*",
   secureHeaders({

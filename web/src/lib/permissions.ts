@@ -67,6 +67,7 @@ export const PERMISSION_CATALOG: PermissionDefinition[] = [
   { key: "calendar.manage", label: "Edit calendar", group: "Operations", detail: true },
   { key: "orders.view", label: "View orders", group: "Operations" },
   { key: "orders.projects", label: "Project orders", group: "Operations", detail: true },
+  { key: "orders.projectDetails", label: "Project details", group: "Operations", detail: true },
   { key: "orders.items", label: "Items sales report", group: "Operations", detail: true },
   { key: "orders.void", label: "Void orders", group: "Operations", detail: true },
   { key: "inventory.view", label: "View inventory", group: "Inventory" },
@@ -104,6 +105,7 @@ const PERMISSION_REQUIRES: Partial<Record<PermissionKey, PermissionKey>> = {
   "pos.projects.pricing.edit": "pos.projects.pricing.view",
   "calendar.manage": "calendar.view",
   "orders.projects": "orders.view",
+  "orders.projectDetails": "orders.view",
   "orders.items": "orders.view",
   "orders.void": "orders.view",
   "inventory.manage": "inventory.view",
@@ -155,7 +157,8 @@ export const DEFAULT_ROLE_POLICIES: RolePoliciesMap = {
     (key) =>
       key !== "staff.manage" &&
       key !== "roles.manage" &&
-      key !== "settings.manage",
+      key !== "settings.manage" &&
+      key !== "orders.projectDetails",
   ),
   CASHIER: [
     "dashboard.view",
@@ -208,7 +211,12 @@ export function permissionMatches(
 function roleFallback(role: UserRole, permission: PermissionKey): boolean {
   if (role === "ADMIN") return true;
   if (role === "MANAGER") {
-    return !["staff.manage", "roles.manage", "settings.manage"].includes(permission);
+    return ![
+      "staff.manage",
+      "roles.manage",
+      "settings.manage",
+      "orders.projectDetails",
+    ].includes(permission);
   }
   if (permission === "vendors.record") return true;
   return [

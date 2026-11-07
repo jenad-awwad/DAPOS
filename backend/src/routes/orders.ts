@@ -211,6 +211,7 @@ orderRoutes.get("/", requireAuth, async (c) => {
   const permissions = c.get("permissions");
   const canViewOrders = userHasPermission(permissions, "orders.view");
   const canViewProjectOrders = userHasPermission(permissions, "orders.projects");
+  const canViewProjectDetails = userHasPermission(permissions, "orders.projectDetails");
   const canOpenProjects = userHasPermission(permissions, "pos.projects");
 
   if (!canViewOrders && !canOpenProjects) {
@@ -235,7 +236,8 @@ orderRoutes.get("/", requireAuth, async (c) => {
   if (
     canViewOrders &&
     parsed.data.orderType === OrderType.PROJECT &&
-    !canViewProjectOrders
+    !canViewProjectOrders &&
+    !canViewProjectDetails
   ) {
     return c.json({ error: "You do not have permission to view project orders" }, 403);
   }
@@ -250,7 +252,14 @@ orderRoutes.get("/", requireAuth, async (c) => {
     dateFrom: parsed.data.dateFrom ? new Date(parsed.data.dateFrom) : undefined,
     dateTo: parsed.data.dateTo ? new Date(parsed.data.dateTo) : undefined,
   });
-  return c.json({ orders: await presentOrders(orders, c.req.url) });
+  const visible = canViewProjectDetails
+    ? orders
+    : orders.map((order) => ({
+        ...order,
+        projectMaterials: [],
+        projectAdjustments: [],
+      }));
+  return c.json({ orders: await presentOrders(visible, c.req.url) });
 });
 
 orderRoutes.post("/:id/void", requireAuth, requireAnyPermission("orders.void"), async (c) => {

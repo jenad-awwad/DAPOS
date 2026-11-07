@@ -157,6 +157,89 @@ function computeTotals(
   };
 }
 
+const ACTIVITY_LABELS: Record<string, string> = {
+  SCHEDULED_ORDER: "Scheduled order",
+  INSTALLATION: "Installation",
+  DELIVERY: "Delivery",
+  ACTIVITY: "Activity",
+  MEETING: "Meeting",
+  OTHER: "Other",
+};
+
+function activityLabel(type: string): string {
+  return ACTIVITY_LABELS[type] ?? type;
+}
+
+const PAYMENT_LABELS: Record<string, string> = {
+  CASH: "Cash",
+  CARD: "Card",
+  CHEQUE: "Cheque",
+  DEBIT: "Debit",
+  BREAKAGE: "Breakage",
+  DELIVERY: "Delivery",
+};
+
+function paymentLabel(method: string): string {
+  return PAYMENT_LABELS[method] ?? method;
+}
+
+function clip(value: string, max = 160): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= max) return trimmed;
+  return `${trimmed.slice(0, max - 1)}…`;
+}
+
+function sameQuantity(left: number, right: number): boolean {
+  return Math.round(left * 1000) === Math.round(right * 1000);
+}
+
+type MaterialSnapshot = {
+  description: string;
+  vendor: string;
+  quantity: number;
+  unitCost: number;
+};
+
+function describeMaterialChanges(before: MaterialSnapshot[], after: MaterialSnapshot[]): string[] {
+  const notes: string[] = [];
+  const used = new Set<number>();
+
+  for (const next of after) {
+    const index = before.findIndex(
+      (prev, prevIndex) =>
+        !used.has(prevIndex) &&
+        prev.description === next.description &&
+        prev.vendor === next.vendor,
+    );
+    if (index < 0) {
+      notes.push(
+        `Material added: ${next.description} from ${next.vendor}, ${next.quantity} × ${next.unitCost}`,
+      );
+      continue;
+    }
+    used.add(index);
+    const prev = before[index]!;
+    const parts: string[] = [];
+    if (!sameQuantity(prev.quantity, next.quantity)) {
+      parts.push(`quantity ${prev.quantity} → ${next.quantity}`);
+    }
+    if (roundMoney(prev.unitCost) !== roundMoney(next.unitCost)) {
+      parts.push(`price ${prev.unitCost} → ${next.unitCost}`);
+    }
+    if (parts.length > 0) {
+      notes.push(`Material "${next.description}" (${next.vendor}): ${parts.join(", ")}`);
+    }
+  }
+
+  before.forEach((prev, index) => {
+    if (!used.has(index)) {
+      notes.push(`Material removed: ${prev.description} from ${prev.vendor}`);
+    }
+  });
+
+  return notes;
+}
+
 async function resolveCustomerId(
   tx: Prisma.TransactionClient,
   storeId: string,
@@ -312,6 +395,34 @@ export async function createOpenProject(input: CreateOpenProjectInput) {
         description: input.notes,
       });
 
+      const created: string[] = [`Project created: ${input.projectTitle.trim()}`];
+      if (customer) {
+        created.push(
+          `customer ${customer.name}${customer.phone ? ` (${customer.phone})` : ""}`,
+        );
+      }
+      if (materialLines.length > 0) {
+        created.push(
+          `${materialLines.length} material line${materialLines.length === 1 ? "" : "s"}`,
+        );
+      }
+      created.push(`customer total ${totals.customerTotal}`);
+      if (input.attachmentKey) created.push("photo attached");
+      if (input.scheduleAt) {
+        created.push(
+          `scheduled for ${input.scheduleAt.toISOString()}${
+            input.scheduleType ? ` (${activityLabel(input.scheduleType)})` : ""
+          }`,
+        );
+      }
+      await tx.orderProjectAdjustment.create({
+        data: {
+          orderId: order.id,
+          userId: input.cashierId,
+          note: created.join("; "),
+        },
+      });
+
       await syncProjectOrderVendorInvoices(
         tx,
         input.storeId,
@@ -403,7 +514,7 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
 
       if (
         input.projectTitle !== undefined &&
-        input.projectTitle.trim() !== order.projectTitle
+        input.projectTitle.trim() !== (order.projectTitle ?? "")
       ) {
         adjustments.push(
           `Title changed from "${order.projectTitle ?? ""}" to "${input.projectTitle.trim()}"`,
@@ -412,7 +523,7 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
 
       if (
         input.sellQuantity !== undefined &&
-        sellQuantity !== (order.projectSellQuantity?.toNumber() ?? 1)
+        !sameQuantity(sellQuantity, order.projectSellQuantity?.toNumber() ?? 1)
       ) {
         adjustments.push(
           `Sell quantity changed from ${order.projectSellQuantity?.toNumber() ?? 1} to ${sellQuantity}`,
@@ -421,7 +532,7 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
 
       if (
         input.sellUnitPrice !== undefined &&
-        sellUnitPrice !== (order.projectSellUnitPrice?.toNumber() ?? 0)
+        roundMoney(sellUnitPrice) !== roundMoney(order.projectSellUnitPrice?.toNumber() ?? 0)
       ) {
         adjustments.push(
           `Sell unit price changed from ${order.projectSellUnitPrice?.toNumber() ?? 0} to ${sellUnitPrice}`,
@@ -430,17 +541,47 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
 
       if (materialsInput !== undefined) {
         adjustments.push(
-          `Materials updated (${materialLines.length} line${materialLines.length === 1 ? "" : "s"})`,
+          ...describeMaterialChanges(
+            order.projectMaterials.map((line) => ({
+              description: line.description,
+              vendor: line.vendor,
+              quantity: line.quantity.toNumber(),
+              unitCost: line.unitCost.toNumber(),
+            })),
+            materialLines,
+          ),
         );
       }
 
       if (
         input.discountTotal !== undefined &&
-        discountTotal !== order.discountTotal.toNumber()
+        roundMoney(discountTotal) !== roundMoney(order.discountTotal.toNumber())
       ) {
         adjustments.push(
           `Discount changed from ${order.discountTotal.toNumber()} to ${discountTotal}`,
         );
+      }
+
+      if (roundMoney(order.total.toNumber()) !== totals.customerTotal) {
+        adjustments.push(
+          `Customer total changed from ${order.total.toNumber()} to ${totals.customerTotal}`,
+        );
+      }
+
+      if (input.notes !== undefined && input.notes.trim() !== (order.notes ?? "").trim()) {
+        const nextNotes = input.notes.trim();
+        adjustments.push(
+          nextNotes ? `Notes changed to "${clip(nextNotes)}"` : "Notes cleared",
+        );
+      }
+
+      if (input.attachmentKey !== undefined) {
+        const nextKey = assertStoreAttachmentKey(input.storeId, input.attachmentKey);
+        if (nextKey !== (order.attachmentKey ?? null)) {
+          if (!order.attachmentKey && nextKey) adjustments.push("Photo attached");
+          else if (order.attachmentKey && !nextKey) adjustments.push("Photo removed");
+          else adjustments.push("Photo replaced");
+        }
       }
 
       const customerId = await resolveCustomerId(
@@ -450,6 +591,31 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
         input.customerName,
         input.customerPhone,
       );
+
+      if (
+        input.customerId !== undefined ||
+        input.customerName !== undefined ||
+        input.customerPhone !== undefined
+      ) {
+        const nextCustomer = customerId
+          ? await tx.customer.findFirst({
+              where: { id: customerId, storeId: input.storeId },
+            })
+          : null;
+        const prevName = order.customer?.name ?? "";
+        const prevPhone = order.customer?.phone ?? "";
+        const nextName = nextCustomer?.name ?? "";
+        const nextPhone = nextCustomer?.phone ?? "";
+        if (prevName !== nextName || prevPhone !== nextPhone) {
+          const from = prevName
+            ? `"${prevName}${prevPhone ? ` (${prevPhone})` : ""}"`
+            : "none";
+          const to = nextName
+            ? `"${nextName}${nextPhone ? ` (${nextPhone})` : ""}"`
+            : "none";
+          adjustments.push(`Customer changed from ${from} to ${to}`);
+        }
+      }
 
       if (materialsInput !== undefined) {
         await tx.orderProjectMaterial.deleteMany({ where: { orderId: order.id } });
@@ -488,6 +654,36 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
         include: projectInclude,
       });
 
+      const scheduledCustomer = customerId
+        ? await tx.customer.findFirst({ where: { id: customerId, storeId: input.storeId } })
+        : order.customer;
+
+      const previousEvent = [...order.calendarEvents].sort(
+        (left, right) => left.startsAt.getTime() - right.startsAt.getTime(),
+      )[0];
+      if (input.scheduleAt) {
+        const previousStart = previousEvent?.startsAt.getTime();
+        const scheduleChanged =
+          previousStart == null ||
+          Math.floor(previousStart / 60_000) !== Math.floor(input.scheduleAt.getTime() / 60_000);
+        if (scheduleChanged) {
+          adjustments.push(
+            previousEvent
+              ? `Schedule changed from ${previousEvent.startsAt.toISOString()} to ${input.scheduleAt.toISOString()}`
+              : `Scheduled for ${input.scheduleAt.toISOString()}`,
+          );
+        }
+      }
+      if (
+        input.scheduleType &&
+        previousEvent &&
+        input.scheduleType !== previousEvent.type
+      ) {
+        adjustments.push(
+          `Activity type changed from ${activityLabel(previousEvent.type)} to ${activityLabel(input.scheduleType)}`,
+        );
+      }
+
       if (adjustments.length > 0) {
         await tx.orderProjectAdjustment.create({
           data: {
@@ -497,10 +693,6 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
           },
         });
       }
-
-      const scheduledCustomer = customerId
-        ? await tx.customer.findFirst({ where: { id: customerId, storeId: input.storeId } })
-        : order.customer;
 
       await syncCalendarEvent(tx, {
         storeId: input.storeId,
@@ -513,16 +705,6 @@ export async function updateOpenProject(input: UpdateOpenProjectInput) {
         customerPhone: scheduledCustomer?.phone ?? input.customerPhone,
         description: input.notes ?? order.notes ?? undefined,
       });
-
-      if (input.scheduleAt) {
-          await tx.orderProjectAdjustment.create({
-            data: {
-              orderId: order.id,
-              userId: input.userId,
-              note: `Scheduled for ${input.scheduleAt.toISOString()}`,
-            },
-          });
-      }
 
       await syncProjectOrderVendorInvoices(
         tx,
@@ -591,7 +773,7 @@ export async function recordProjectPayment(input: RecordProjectPaymentInput) {
         data: {
           orderId: order.id,
           userId: input.userId,
-          note: `Partial payment recorded: ${amount} via ${input.paymentMethod}`,
+          note: `Partial payment recorded: ${amount} via ${paymentLabel(input.paymentMethod)}; balance due ${roundMoney(balanceDue - amount)}`,
         },
       });
 

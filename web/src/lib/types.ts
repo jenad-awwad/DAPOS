@@ -21,6 +21,7 @@ export type PermissionKey =
   | "calendar.manage"
   | "orders.view"
   | "orders.projects"
+  | "orders.projectDetails"
   | "orders.items"
   | "orders.void"
   | "inventory.view"
@@ -280,6 +281,12 @@ export type Order = {
   projectMaterials?: OrderProjectMaterial[];
   projectAdjustments?: OrderProjectAdjustment[];
   payments?: Payment[];
+  calendarEvents?: {
+    id: string;
+    type: CalendarEventType;
+    startsAt: string;
+    status: CalendarEventStatus;
+  }[];
   cashier?: { id: string; name: string; phone: string };
   customer?: { id: string; name: string; phone?: string | null } | null;
 };

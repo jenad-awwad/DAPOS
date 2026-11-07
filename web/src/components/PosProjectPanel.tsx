@@ -31,7 +31,7 @@ import {
   updateProjectOrder,
 } from "../lib/api";
 import { customerInvoiceText, whatsAppShareUrl } from "../lib/customerInvoice";
-import { localDateTimeToIso } from "../lib/datetime";
+import { isoToLocalDateInput, isoToLocalTimeInput, localDateTimeToIso } from "../lib/datetime";
 import { formatMoney } from "../lib/format";
 import { projectBalanceDue, projectIsFullyPaid, projectPaidTotal } from "../lib/projectPayments";
 import {
@@ -105,6 +105,7 @@ export function PosProjectPanel() {
   >(null);
   const [phase, setPhase] = useState(0);
   const loadedMaterialIds = useRef(new Set<string>());
+  const openedEditId = useRef<string | null>(null);
 
   const customersQuery = useQuery({
     queryKey: ["customers"],
@@ -148,7 +149,31 @@ export function PosProjectPanel() {
     setInvoiceDiscountPercent(
       gross > 0 ? Math.round((discount / gross) * 1000) / 10 : 0,
     );
+    const scheduled = order.calendarEvents?.[0];
+    if (scheduled?.startsAt) {
+      setScheduleDate(isoToLocalDateInput(scheduled.startsAt));
+      setScheduleTime(isoToLocalTimeInput(scheduled.startsAt));
+      setScheduleType(scheduled.type);
+    }
   }, [editOrderQuery.data?.order]);
+
+  useEffect(() => {
+    if (!editingOrderId) {
+      openedEditId.current = null;
+      return;
+    }
+    if (openedEditId.current === editingOrderId) return;
+    openedEditId.current = editingOrderId;
+    const editable = [canEditIntake, canEditMaterials || canSetMaterialPrice, canEditPricing];
+    const firstEditable = editable.findIndex(Boolean);
+    if (firstEditable >= 0) setPhase(firstEditable);
+  }, [
+    editingOrderId,
+    canEditIntake,
+    canEditMaterials,
+    canSetMaterialPrice,
+    canEditPricing,
+  ]);
 
   useEffect(() => {
     const allowed = [canReviewIntake, canReviewMaterials, canReviewPricing];
@@ -331,7 +356,11 @@ export function PosProjectPanel() {
 
     setLoadingAction("save");
     try {
-      const { order } = await persistProject();
+      const scheduleAt =
+        canEditPricing && scheduleDate.trim()
+          ? localDateTimeToIso(scheduleDate, scheduleTime)
+          : undefined;
+      const { order } = await persistProject(scheduleAt);
       if (canEditPricing) await recordPendingPartial(order.id);
       if (!editingOrderId) {
         setSearchParams({ edit: order.id });
@@ -488,9 +517,21 @@ export function PosProjectPanel() {
           if (phaseAllowed[step]) setPhase(step);
         }}
       >
-        <Stepper.Step label="1. Project details" description="Title, customer, phone, picture" />
-        <Stepper.Step label="2. Materials" description="Lines and material prices" />
-        <Stepper.Step label="3. Price and schedule" description="Customer price" />
+        <Stepper.Step
+          label="1. Project details"
+          description="Title, customer, phone, picture"
+          allowStepSelect={phaseAllowed[0]}
+        />
+        <Stepper.Step
+          label="2. Materials"
+          description="Lines and material prices"
+          allowStepSelect={phaseAllowed[1]}
+        />
+        <Stepper.Step
+          label="3. Price and schedule"
+          description="Customer price"
+          allowStepSelect={phaseAllowed[2]}
+        />
       </Stepper>
 
       {phase === 0 ? (

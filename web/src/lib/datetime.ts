@@ -28,3 +28,19 @@ export function localDateTimeToIso(date: string, time: string): string {
 
   return value.toISOString();
 }
+
+function pad(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+/** `YYYY-MM-DD` in the browser's local timezone, for a date input. */
+export function isoToLocalDateInput(value: string): string {
+  const date = new Date(value);
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** `HH:MM` in the browser's local timezone, for a time input. */
+export function isoToLocalTimeInput(value: string): string {
+  const date = new Date(value);
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
