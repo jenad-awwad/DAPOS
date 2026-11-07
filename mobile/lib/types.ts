@@ -29,6 +29,7 @@ export type PermissionKey =
   | "products.view"
   | "products.details"
   | "products.price"
+  | "products.stockDetails"
   | "products.manage"
   | "categories.view"
   | "categories.manage"

@@ -17,6 +17,7 @@ function roleFallback(role: UserRole, permission: PermissionKey): boolean {
       "roles.manage",
       "settings.manage",
       "orders.projectDetails",
+      "products.stockDetails",
     ].includes(permission);
   }
   if (permission === "vendors.record") return true;

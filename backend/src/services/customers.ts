@@ -1,4 +1,5 @@
 import { OrderStatus } from "@prisma/client";
+import { phoneLocalKey, phoneLookupValues, phonesEquivalent } from "../lib/phone.js";
 import { prisma } from "../lib/prisma.js";
 
 export type CustomerStatsFilters = {
@@ -196,4 +197,21 @@ export async function listCustomersWithStats(
     summary,
     orderMonthLabel: monthRange.label,
   };
+}
+
+export async function findCustomerByPhone(storeId: string, phone: string) {
+  const exact = await prisma.customer.findFirst({
+    where: { storeId, phone: { in: phoneLookupValues(phone) } },
+  });
+  if (exact) return exact;
+
+  const local = phoneLocalKey(phone);
+  if (local.length < 7) return null;
+
+  const candidates = await prisma.customer.findMany({
+    where: { storeId, phone: { contains: local } },
+    take: 25,
+  });
+
+  return candidates.find((customer) => customer.phone && phonesEquivalent(customer.phone, phone)) ?? null;
 }

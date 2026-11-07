@@ -1,54 +1,65 @@
-import { Button, Group, Image, Stack, Text } from "@mantine/core";
-import { notifications } from "@mantine/notifications";
+import { Button, Group, Stack, Text } from "@mantine/core";
 import { IconCamera, IconPhoto } from "@tabler/icons-react";
-import { useRef } from "react";
-
-const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
-
-async function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("Could not read image"));
-    reader.readAsDataURL(file);
-  });
-}
+import { useRef, useState } from "react";
+import { optimizeImageFile, type OptimizedImage } from "../lib/optimizeImage";
+import { ImageReviewModal } from "./ImageReviewModal";
 
 type ProductImagePickerProps = {
   value: string;
   onChange: (value: string) => void;
   error?: string;
+  uploadPercent?: number | null;
 };
 
 export function ProductImagePicker({
   value,
   onChange,
   error,
+  uploadPercent = null,
 }: ProductImagePickerProps) {
   const galleryRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
+  const requestId = useRef(0);
+  const [preparing, setPreparing] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [status, setStatus] = useState("");
+  const [prepareError, setPrepareError] = useState("");
+  const [review, setReview] = useState<OptimizedImage | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+
+  const closeReview = () => {
+    requestId.current += 1;
+    setReviewOpen(false);
+    setPreparing(false);
+    setReview(null);
+    setPrepareError("");
+  };
 
   const handleFiles = async (files: FileList | null) => {
     const file = files?.[0];
     if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      notifications.show({ color: "red", message: "Please choose an image file" });
-      return;
-    }
-
-    if (file.size > MAX_IMAGE_BYTES) {
-      notifications.show({
-        color: "red",
-        message: "Image must be 2 MB or smaller",
-      });
-      return;
-    }
-
+    const id = requestId.current + 1;
+    requestId.current = id;
+    setReviewOpen(true);
+    setPreparing(true);
+    setReview(null);
+    setPrepareError("");
+    setProgress(0);
+    setStatus("Reading photo…");
     try {
-      onChange(await readFileAsDataUrl(file));
-    } catch {
-      notifications.show({ color: "red", message: "Could not load image" });
+      const optimized = await optimizeImageFile(file, (percent, label) => {
+        if (requestId.current !== id) return;
+        setProgress(percent);
+        setStatus(label);
+      });
+      if (requestId.current !== id) return;
+      setReview(optimized);
+      setPreparing(false);
+      setStatus("Ready to review");
+    } catch (err) {
+      if (requestId.current !== id) return;
+      setPreparing(false);
+      setPrepareError(err instanceof Error ? err.message : "Could not prepare this photo.");
     }
   };
 
@@ -58,17 +69,23 @@ export function ProductImagePicker({
         Product photo *
       </Text>
       {value ? (
-        <Image
-          src={value}
-          alt="Product preview"
-          h={180}
-          w="100%"
-          fit="cover"
-          radius="md"
-        />
+        <div
+          style={{
+            background: "#f1f3f5",
+            borderRadius: 8,
+            display: "flex",
+            justifyContent: "center",
+          }}
+        >
+          <img
+            src={value}
+            alt="Product preview"
+            style={{ display: "block", maxWidth: "100%", maxHeight: 180, objectFit: "contain" }}
+          />
+        </div>
       ) : (
         <Text size="sm" c="dimmed">
-          Take a photo or choose one from your gallery.
+          Take a photo or choose one from your gallery. You can review it before it is saved.
         </Text>
       )}
       <Group>
@@ -88,6 +105,11 @@ export function ProductImagePicker({
           Gallery
         </Button>
       </Group>
+      {uploadPercent !== null ? (
+        <Text size="xs" c="dimmed">
+          Uploading photo… {uploadPercent}%
+        </Text>
+      ) : null}
       {error ? (
         <Text size="sm" c="red">
           {error}
@@ -114,16 +136,29 @@ export function ProductImagePicker({
           e.currentTarget.value = "";
         }}
       />
+      <ImageReviewModal
+        opened={reviewOpen}
+        previewUrl={review?.dataUrl ?? null}
+        width={review?.width}
+        height={review?.height}
+        bytes={review?.bytes}
+        progress={progress}
+        status={status}
+        error={prepareError}
+        preparing={preparing}
+        uploading={false}
+        onConfirm={() => {
+          if (!review) return;
+          onChange(review.dataUrl);
+          closeReview();
+        }}
+        onClose={closeReview}
+      />
     </Stack>
   );
 }
 
 export async function fileToDataUrl(file: File): Promise<string> {
-  if (!file.type.startsWith("image/")) {
-    throw new Error("Please choose an image file");
-  }
-  if (file.size > MAX_IMAGE_BYTES) {
-    throw new Error("Image must be 2 MB or smaller");
-  }
-  return readFileAsDataUrl(file);
+  const optimized = await optimizeImageFile(file);
+  return optimized.dataUrl;
 }

@@ -101,33 +101,82 @@ async function request<T>(
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    if (response.status === 401 && !path.startsWith("/auth/login")) {
-      clearToken();
-      onUnauthorized?.();
-    }
-    const message =
-      typeof data.error === "string"
-        ? data.error
-        : "Request failed";
-    if (response.status === 404 && message === "Not found") {
-      throw new Error(
-        `API route not found (${API_URL}${path}). If running locally, restart the web app and use http://localhost:5173. Production may need a backend redeploy.`,
-      );
-    }
-    const details = data.details as
-      | { fieldErrors?: Record<string, string[]> }
-      | undefined;
-    const fieldMessages = details?.fieldErrors
-      ? Object.entries(details.fieldErrors)
-          .flatMap(([field, errors]) =>
-            (errors ?? []).map((error) => `${field}: ${error}`),
-          )
-          .join("; ")
-      : "";
-    throw new ApiError(fieldMessages ? `${message} (${fieldMessages})` : message, response.status);
+    throwForStatus(path, response.status, data);
   }
 
   return data as T;
+}
+
+type ErrorBody = {
+  error?: unknown;
+  details?: { fieldErrors?: Record<string, string[]> };
+};
+
+function throwForStatus(path: string, status: number, data: ErrorBody): never {
+  if (status === 401 && !path.startsWith("/auth/login")) {
+    clearToken();
+    onUnauthorized?.();
+  }
+  const message = typeof data.error === "string" ? data.error : "Request failed";
+  if (status === 404 && message === "Not found") {
+    throw new Error(
+      `API route not found (${API_URL}${path}). If running locally, restart the web app and use http://localhost:5173. Production may need a backend redeploy.`,
+    );
+  }
+  const fieldMessages = data.details?.fieldErrors
+    ? Object.entries(data.details.fieldErrors)
+        .flatMap(([field, errors]) => (errors ?? []).map((error) => `${field}: ${error}`))
+        .join("; ")
+    : "";
+  throw new ApiError(fieldMessages ? `${message} (${fieldMessages})` : message, status);
+}
+
+function sendJson<T>(
+  path: string,
+  method: string,
+  body: unknown,
+  onUploadProgress?: (percent: number) => void,
+): Promise<T> {
+  const payload = JSON.stringify(body);
+  if (!onUploadProgress) {
+    return request<T>(path, { method, body: payload });
+  }
+
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, `${API_URL}${path}`);
+    xhr.setRequestHeader("Content-Type", "application/json");
+    const token = getToken();
+    if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable || event.total <= 0) return;
+      onUploadProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+    };
+    xhr.onerror = () => {
+      reject(new Error("The photo could not be uploaded. Check your connection and try again."));
+    };
+    xhr.onabort = () => {
+      reject(new Error("The upload was cancelled."));
+    };
+    xhr.onload = () => {
+      let data: ErrorBody = {};
+      try {
+        data = JSON.parse(xhr.responseText || "{}") as ErrorBody;
+      } catch {
+        data = {};
+      }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        try {
+          throwForStatus(path, xhr.status, data);
+        } catch (error) {
+          reject(error);
+        }
+        return;
+      }
+      resolve(data as T);
+    };
+    xhr.send(payload);
+  });
 }
 
 export function login(phone: string, pin: string) {
@@ -231,22 +280,22 @@ export function fetchProductByBarcode(barcode: string) {
   );
 }
 
-export function createProduct(payload: {
-  sku?: string | null;
-  barcode?: string | null;
-  name: string;
-  supplier?: string;
-  vendorId?: string | null;
-  imageUrl: string;
-  onStock?: number;
-  lowStockAt?: number | null;
-  categoryId?: string | null;
-  description?: string | null;
-}) {
-  return request<{ product: Product }>("/products", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+export function createProduct(
+  payload: {
+    sku?: string | null;
+    barcode?: string | null;
+    name: string;
+    supplier?: string;
+    vendorId?: string | null;
+    imageUrl: string;
+    onStock?: number;
+    lowStockAt?: number | null;
+    categoryId?: string | null;
+    description?: string | null;
+  },
+  onUploadProgress?: (percent: number) => void,
+) {
+  return sendJson<{ product: Product }>("/products", "POST", payload, onUploadProgress);
 }
 
 export function setProductPricing(
@@ -284,11 +333,12 @@ export function assignPricingRequest(id: string, assignedToId: string | null) {
   });
 }
 
-export function updateProduct(id: string, payload: Partial<Product>) {
-  return request<{ product: Product }>(`/products/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(payload),
-  });
+export function updateProduct(
+  id: string,
+  payload: Partial<Product>,
+  onUploadProgress?: (percent: number) => void,
+) {
+  return sendJson<{ product: Product }>(`/products/${id}`, "PATCH", payload, onUploadProgress);
 }
 
 export function deleteProduct(id: string) {
@@ -795,9 +845,14 @@ export function uploadVendorAttachment(imageDataUrl: string) {
   return uploadAttachment(imageDataUrl);
 }
 
-export function uploadAttachment(imageDataUrl: string) {
-  return request<{ key: string }>("/uploads/attachment", {
-    method: "POST",
-    body: JSON.stringify({ imageDataUrl }),
-  });
+export function uploadAttachment(
+  imageDataUrl: string,
+  onUploadProgress?: (percent: number) => void,
+) {
+  return sendJson<{ key: string }>(
+    "/uploads/attachment",
+    "POST",
+    { imageDataUrl },
+    onUploadProgress,
+  );
 }

@@ -19,7 +19,7 @@ import {
 import { useForm } from "@mantine/form";
 import { useDebouncedValue, useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
-import { IconEdit, IconPlus, IconSearch, IconTrash, IconX } from "@tabler/icons-react";
+import { IconEdit, IconFileSpreadsheet, IconPlus, IconSearch, IconTrash, IconX } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
@@ -31,6 +31,7 @@ import {
   fetchCustomerReport,
   updateCustomer,
 } from "../lib/api";
+import { exportCustomersToExcel } from "../lib/exportCustomers";
 import { formatDateOnly, formatMoney } from "../lib/format";
 import type { Customer } from "../lib/types";
 
@@ -136,19 +137,43 @@ export function CustomersPage() {
           <Title order={2}>Customers</Title>
           <Text c="dimmed">Customer records, loyalty, and order activity</Text>
         </div>
-        {canEditCustomers ? (
-        <Button
-          color="green"
-          leftSection={<IconPlus size={16} />}
-          onClick={() => {
-            setEditing(null);
-            form.reset();
-            open();
-          }}
-        >
-          Add customer
-        </Button>
-        ) : null}
+        <Group>
+          <Button
+            variant="light"
+            color="green"
+            leftSection={<IconFileSpreadsheet size={16} />}
+            disabled={customers.length === 0}
+            onClick={() => {
+              try {
+                exportCustomersToExcel(customers, orderMonthLabel);
+                notifications.show({
+                  color: "green",
+                  message: "Excel file downloaded",
+                });
+              } catch (err) {
+                notifications.show({
+                  color: "red",
+                  message: err instanceof Error ? err.message : "Could not export Excel",
+                });
+              }
+            }}
+          >
+            Export Excel
+          </Button>
+          {canEditCustomers ? (
+            <Button
+              color="green"
+              leftSection={<IconPlus size={16} />}
+              onClick={() => {
+                setEditing(null);
+                form.reset();
+                open();
+              }}
+            >
+              Add customer
+            </Button>
+          ) : null}
+        </Group>
       </Group>
 
       <Card withBorder padding="md" radius="md">

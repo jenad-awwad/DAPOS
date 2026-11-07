@@ -48,9 +48,11 @@ type BarcodeCameraScannerProps = {
   streamRequestRef: { current: Promise<MediaStream> | null };
   onClose: () => void;
   onDetected: (code: string) => Promise<BarcodeScanResult>;
-  line: ScannedLine | null;
-  onQuantityChange: (quantity: number) => void;
-  onPriceChange: (unitPrice: number) => void;
+  line?: ScannedLine | null;
+  onQuantityChange?: (quantity: number) => void;
+  onPriceChange?: (unitPrice: number) => void;
+  /** Shown while a detected code is being accepted. */
+  readingLabel?: string;
 };
 
 let detectorPromise: Promise<BarcodeDetectorLike> | null = null;
@@ -183,9 +185,10 @@ export function BarcodeCameraScanner({
   streamRequestRef,
   onClose,
   onDetected,
-  line,
+  line = null,
   onQuantityChange,
   onPriceChange,
+  readingLabel = "Looking up…",
 }: BarcodeCameraScannerProps) {
   const isPhone = useMediaQuery("(max-width: 48em)");
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -300,7 +303,7 @@ export function BarcodeCameraScanner({
               lastValue = value;
               lastAt = now;
               setTone("idle");
-              setStatus("Looking up…");
+              setStatus(readingLabel);
               try {
                 const result = await onDetectedRef.current(value);
                 if (!stopped) {
@@ -362,7 +365,7 @@ export function BarcodeCameraScanner({
       stopStream();
       torchTrackRef.current = null;
     };
-  }, [opened, streamRequestRef]);
+  }, [opened, streamRequestRef, readingLabel]);
 
   const chooseScanMode = (mode: "continuous" | "tap") => {
     setScanMode(mode);
@@ -467,7 +470,7 @@ export function BarcodeCameraScanner({
                 size="sm"
                 min={1}
                 value={line.quantity}
-                onChange={(value) => onQuantityChange(Number(value) || 1)}
+                onChange={(value) => onQuantityChange?.(Number(value) || 1)}
               />
               {line.canChangePrice ? (
                 <NumberInput
@@ -476,7 +479,7 @@ export function BarcodeCameraScanner({
                   min={0}
                   decimalScale={2}
                   value={line.unitPrice}
-                  onChange={(value) => onPriceChange(Number(value) || 0)}
+                  onChange={(value) => onPriceChange?.(Number(value) || 0)}
                 />
               ) : (
                 <Stack gap={4}>

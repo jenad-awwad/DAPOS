@@ -1,19 +1,9 @@
 import { Anchor, Button, Group, Image, Modal, Stack, Text } from "@mantine/core";
-import { notifications } from "@mantine/notifications";
 import { IconCamera, IconPhoto } from "@tabler/icons-react";
 import { useRef, useState } from "react";
 import { uploadAttachment } from "../lib/api";
-
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-
-async function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error("Could not read image"));
-    reader.readAsDataURL(file);
-  });
-}
+import { optimizeImageFile, type OptimizedImage } from "../lib/optimizeImage";
+import { ImageReviewModal } from "./ImageReviewModal";
 
 type VendorAttachmentPickerProps = {
   previewUrl: string | null;
@@ -30,38 +20,72 @@ export function VendorAttachmentPicker({
 }: VendorAttachmentPickerProps) {
   const galleryRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
-  const [uploading, setUploading] = useState(false);
+  const requestId = useRef(0);
   const [opened, setOpened] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [status, setStatus] = useState("");
+  const [prepareError, setPrepareError] = useState("");
+  const [review, setReview] = useState<OptimizedImage | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+
+  const closeReview = () => {
+    requestId.current += 1;
+    setReviewOpen(false);
+    setPreparing(false);
+    setUploading(false);
+    setReview(null);
+    setPrepareError("");
+  };
 
   const handleFiles = async (files: FileList | null) => {
     const file = files?.[0];
     if (!file) return;
-
-    if (!file.type.startsWith("image/")) {
-      notifications.show({ color: "red", message: "Please choose an image file" });
-      return;
-    }
-
-    if (file.size > MAX_IMAGE_BYTES) {
-      notifications.show({
-        color: "red",
-        message: "Image must be 5 MB or smaller",
-      });
-      return;
-    }
-
-    setUploading(true);
+    const id = requestId.current + 1;
+    requestId.current = id;
+    setReviewOpen(true);
+    setPreparing(true);
+    setUploading(false);
+    setReview(null);
+    setPrepareError("");
+    setProgress(0);
+    setStatus("Reading photo…");
     try {
-      const dataUrl = await readFileAsDataUrl(file);
-      const { key } = await uploadAttachment(dataUrl);
-      onUploaded(key, dataUrl);
-    } catch (err) {
-      notifications.show({
-        color: "red",
-        message: err instanceof Error ? err.message : "Upload failed",
+      const optimized = await optimizeImageFile(file, (percent, label) => {
+        if (requestId.current !== id) return;
+        setProgress(percent);
+        setStatus(label);
       });
-    } finally {
+      if (requestId.current !== id) return;
+      setReview(optimized);
+      setPreparing(false);
+      setStatus("Ready to review");
+    } catch (err) {
+      if (requestId.current !== id) return;
+      setPreparing(false);
+      setPrepareError(err instanceof Error ? err.message : "Could not prepare this photo.");
+    }
+  };
+
+  const confirmUpload = async () => {
+    if (!review) return;
+    setUploading(true);
+    setPrepareError("");
+    setProgress(0);
+    setStatus("Uploading photo…");
+    try {
+      const { key } = await uploadAttachment(review.dataUrl, (percent) => {
+        setProgress(percent);
+        setStatus("Uploading photo…");
+      });
+      onUploaded(key, review.dataUrl);
+      closeReview();
+    } catch (err) {
       setUploading(false);
+      setPrepareError(
+        err instanceof Error ? err.message : "The photo could not be uploaded. Try again.",
+      );
     }
   };
 
@@ -113,7 +137,6 @@ export function VendorAttachmentPicker({
           variant="light"
           color="green"
           leftSection={<IconCamera size={16} />}
-          loading={uploading}
           onClick={() => cameraRef.current?.click()}
         >
           Camera
@@ -122,7 +145,6 @@ export function VendorAttachmentPicker({
           variant="light"
           color="gray"
           leftSection={<IconPhoto size={16} />}
-          loading={uploading}
           onClick={() => galleryRef.current?.click()}
         >
           Gallery
@@ -153,6 +175,22 @@ export function VendorAttachmentPicker({
           void handleFiles(e.target.files);
           e.target.value = "";
         }}
+      />
+      <ImageReviewModal
+        opened={reviewOpen}
+        previewUrl={review?.dataUrl ?? null}
+        width={review?.width}
+        height={review?.height}
+        bytes={review?.bytes}
+        progress={progress}
+        status={status}
+        error={prepareError}
+        preparing={preparing}
+        uploading={uploading}
+        onConfirm={() => {
+          void confirmUpload();
+        }}
+        onClose={closeReview}
       />
       </>
       )}

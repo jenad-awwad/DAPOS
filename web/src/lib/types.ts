@@ -29,6 +29,7 @@ export type PermissionKey =
   | "products.view"
   | "products.details"
   | "products.price"
+  | "products.stockDetails"
   | "products.manage"
   | "categories.view"
   | "categories.manage"
@@ -156,6 +157,7 @@ export type Product = {
   isPriced: boolean;
   isActive?: boolean;
   showOnPos?: boolean;
+  createdAt?: string;
   category?: Category | null;
 };
 

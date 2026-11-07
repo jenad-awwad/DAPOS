@@ -41,7 +41,8 @@ import {
 } from "../lib/api";
 import { invalidateDashboardQueries } from "../lib/dashboardQueries";
 import { formatMoney, paymentLabel } from "../lib/format";
-import type { PaymentMethod, Product } from "../lib/types";
+import { customerNamesMatch, phoneMatchesSearch, phonesMatch } from "../lib/phone";
+import type { Customer, PaymentMethod, Product } from "../lib/types";
 
 const PRIMARY_PAYMENTS: PaymentMethod[] = ["CASH", "CARD", "CHEQUE"];
 
@@ -142,6 +143,43 @@ export function PosPage() {
     queryKey: ["customers", "loyalty"],
     queryFn: () => fetchCustomers(undefined, true),
   });
+
+  const phoneDirectoryQuery = useQuery({
+    queryKey: ["customers", "phone-directory"],
+    queryFn: () => fetchCustomers(),
+    enabled: canSell,
+  });
+
+  const loyaltyPhones = useMemo(() => {
+    const phones = new Map<string, string>();
+    for (const customer of customersQuery.data?.customers ?? []) {
+      if (customer.phone) phones.set(customer.id, customer.phone);
+    }
+    return phones;
+  }, [customersQuery.data]);
+
+  const conflictingCustomer = (phone: string, name: string): Customer | null => {
+    const trimmed = phone.trim();
+    if (!trimmed) return null;
+    return (
+      phoneDirectoryQuery.data?.customers.find(
+        (customer) =>
+          !!customer.phone &&
+          phonesMatch(customer.phone, trimmed) &&
+          !customerNamesMatch(customer.name, name),
+      ) ?? null
+    );
+  };
+
+  const rejectTakenPhone = (phone: string, name: string) => {
+    const owner = conflictingCustomer(phone, name);
+    if (!owner) return false;
+    notifications.show({
+      color: "red",
+      message: `This number belongs to ${owner.name}`,
+    });
+    return true;
+  };
 
   const discountPercent =
     invoiceDiscountPercent === "" ? 0 : Math.min(100, Math.max(0, invoiceDiscountPercent));
@@ -286,6 +324,8 @@ export function PosPage() {
       return;
     }
 
+    if (rejectTakenPhone(debitCustomerPhone, debitCustomerName)) return;
+
     setDebitModalLoading(true);
     try {
       await upsertPosCustomer({
@@ -325,6 +365,7 @@ export function PosPage() {
         });
         return;
       }
+      if (rejectTakenPhone(customerPhone, customerName)) return;
     }
 
     const resolvedPayment =
@@ -336,6 +377,10 @@ export function PosPage() {
           color: "red",
           message: "Customer name and phone are required for debit payment",
         });
+        openDebitModal();
+        return;
+      }
+      if (rejectTakenPhone(debitCustomerPhone, debitCustomerName)) {
         openDebitModal();
         return;
       }
@@ -373,6 +418,7 @@ export function PosPage() {
           canDiscount && invoiceDiscountAmount > 0 ? Number(invoiceDiscountAmount) : undefined,
       });
       await invalidateDashboardQueries(queryClient);
+      await queryClient.invalidateQueries({ queryKey: ["customers"] });
       clear();
       setInvoiceDiscountPercent(0);
       setLoyaltyActive(false);
@@ -397,6 +443,9 @@ export function PosPage() {
       setCheckoutLoading(false);
     }
   };
+
+  const loyaltyPhoneConflict = conflictingCustomer(customerPhone, customerName);
+  const debitPhoneConflict = conflictingCustomer(debitCustomerPhone, debitCustomerName);
 
   if (!canSell && !canOpenProjects) {
     return (
@@ -597,16 +646,42 @@ export function PosPage() {
                     <Stack gap="xs">
                       <Select
                         label="Existing loyalty member"
-                        placeholder="New customer"
+                        placeholder="Search by phone number"
+                        nothingFoundMessage="No member with this phone number"
                         clearable
                         searchable
                         size="xs"
                         data={(customersQuery.data?.customers ?? []).map((c) => ({
                           value: c.id,
-                          label: `${c.name} · ${c.loyaltyPoints} pts`,
+                          label: c.phone
+                            ? `${c.phone} · ${c.name} · ${c.loyaltyPoints} pts`
+                            : c.name,
                         }))}
+                        filter={({ options, search, limit }) => {
+                          const matched = options.flatMap((item) => {
+                            if ("items" in item) return [];
+                            const phone = loyaltyPhones.get(String(item.value));
+                            if (!search.trim()) return [item];
+                            if (phone && phoneMatchesSearch(phone, search)) return [item];
+                            return [];
+                          });
+                          return matched.slice(0, limit);
+                        }}
                         value={customerId}
                         onChange={(v) => selectLoyaltyCustomer(v)}
+                      />
+                      <TextInput
+                        label="Phone"
+                        required
+                        size="xs"
+                        value={customerPhone}
+                        error={
+                          loyaltyPhoneConflict
+                            ? `This number belongs to ${loyaltyPhoneConflict.name}`
+                            : undefined
+                        }
+                        onChange={(e) => setCustomerPhone(e.currentTarget.value)}
+                        onBlur={() => rejectTakenPhone(customerPhone, customerName)}
                       />
                       <TextInput
                         label="Name"
@@ -614,13 +689,6 @@ export function PosPage() {
                         size="xs"
                         value={customerName}
                         onChange={(e) => setCustomerName(e.currentTarget.value)}
-                      />
-                      <TextInput
-                        label="Phone"
-                        required
-                        size="xs"
-                        value={customerPhone}
-                        onChange={(e) => setCustomerPhone(e.currentTarget.value)}
                       />
                       <TextInput
                         label="Email"
@@ -734,19 +802,25 @@ export function PosPage() {
       >
         <Stack gap="md">
           <Text size="sm" c="dimmed">
-            Enter the customer name and phone number for this debit sale.
+            The phone number identifies the customer for this debit sale.
           </Text>
+          <TextInput
+            label="Phone number"
+            required
+            value={debitCustomerPhone}
+            error={
+              debitPhoneConflict
+                ? `This number belongs to ${debitPhoneConflict.name}`
+                : undefined
+            }
+            onChange={(e) => setDebitCustomerPhone(e.currentTarget.value)}
+            onBlur={() => rejectTakenPhone(debitCustomerPhone, debitCustomerName)}
+          />
           <TextInput
             label="Customer name"
             required
             value={debitCustomerName}
             onChange={(e) => setDebitCustomerName(e.currentTarget.value)}
-          />
-          <TextInput
-            label="Phone number"
-            required
-            value={debitCustomerPhone}
-            onChange={(e) => setDebitCustomerPhone(e.currentTarget.value)}
           />
           <Group justify="flex-end">
             <Button variant="default" onClick={cancelDebitModal}>

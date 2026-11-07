@@ -1,12 +1,12 @@
 import { Hono } from "hono";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
-import { phoneCandidates } from "../lib/phone.js";
+import { customerNamesMatch, phoneTakenMessage } from "../lib/phone.js";
 import { serialize } from "../lib/serialize.js";
 import { requireAuth, type AppEnv } from "../middleware/auth.js";
 import { requireAnyPermission } from "../middleware/permissions.js";
 import { userHasPermission, type PermissionKey } from "../lib/permissions.js";
-import { listCustomersWithStats } from "../services/customers.js";
+import { findCustomerByPhone, listCustomersWithStats } from "../services/customers.js";
 
 const createCustomerSchema = z.object({
   name: z.string().min(1).max(200),
@@ -143,40 +143,18 @@ customerRoutes.post("/enroll", requireAuth, requireAnyPermission("pos.loyalty"),
   }
 
   const phone = parsed.data.phone.trim();
+  const name = parsed.data.name.trim();
   const now = new Date();
+  const byPhone = await findCustomerByPhone(storeId, phone);
 
-  if (parsed.data.customerId) {
-    const existing = await prisma.customer.findFirst({
-      where: { id: parsed.data.customerId, storeId },
-    });
-    if (!existing) {
-      return c.json({ error: "Customer not found" }, 404);
-    }
-    const customer = await prisma.customer.update({
-      where: { id: existing.id },
-      data: {
-        name: parsed.data.name.trim(),
-        phone,
-        email: parsed.data.email ?? existing.email,
-        loyaltyEnrolled: true,
-        loyaltyJoinedAt: existing.loyaltyJoinedAt ?? now,
-      },
-    });
-    return c.json({ customer: serialize(customer) });
+  if (byPhone && !customerNamesMatch(byPhone.name, name)) {
+    return c.json({ error: phoneTakenMessage(byPhone.name) }, 409);
   }
-
-  const byPhone = await prisma.customer.findFirst({
-    where: {
-      storeId,
-      phone: { in: phoneCandidates(phone) },
-    },
-  });
 
   if (byPhone) {
     const customer = await prisma.customer.update({
       where: { id: byPhone.id },
       data: {
-        name: parsed.data.name.trim(),
         phone,
         email: parsed.data.email ?? byPhone.email,
         loyaltyEnrolled: true,
@@ -186,10 +164,31 @@ customerRoutes.post("/enroll", requireAuth, requireAnyPermission("pos.loyalty"),
     return c.json({ customer: serialize(customer) });
   }
 
+  if (parsed.data.customerId) {
+    const existing = await prisma.customer.findFirst({
+      where: { id: parsed.data.customerId, storeId },
+    });
+    if (!existing) {
+      return c.json({ error: "Customer not found" }, 404);
+    }
+    if (customerNamesMatch(existing.name, name)) {
+      const customer = await prisma.customer.update({
+        where: { id: existing.id },
+        data: {
+          phone,
+          email: parsed.data.email ?? existing.email,
+          loyaltyEnrolled: true,
+          loyaltyJoinedAt: existing.loyaltyJoinedAt ?? now,
+        },
+      });
+      return c.json({ customer: serialize(customer) });
+    }
+  }
+
   const customer = await prisma.customer.create({
     data: {
       storeId,
-      name: parsed.data.name.trim(),
+      name,
       phone,
       email: parsed.data.email ?? null,
       loyaltyEnrolled: true,
@@ -202,7 +201,6 @@ customerRoutes.post("/enroll", requireAuth, requireAnyPermission("pos.loyalty"),
 
 customerRoutes.post("/pos", requireAuth, requireAnyPermission("pos.sales"), async (c) => {
   const { storeId } = c.get("auth");
-  const canManage = userHasPermission(c.get("permissions"), "customers.manage");
   const body = await c.req.json().catch(() => null);
   const parsed = posCustomerSchema.safeParse(body);
 
@@ -212,23 +210,20 @@ customerRoutes.post("/pos", requireAuth, requireAnyPermission("pos.sales"), asyn
 
   const phone = parsed.data.phone.trim();
   const name = parsed.data.name.trim();
-
-  const byPhone = await prisma.customer.findFirst({
-    where: {
-      storeId,
-      phone: { in: phoneCandidates(phone) },
-    },
-  });
+  const byPhone = await findCustomerByPhone(storeId, phone);
 
   if (byPhone) {
-    if (!canManage) {
-      return c.json({ customer: serialize(byPhone) });
+    if (!customerNamesMatch(byPhone.name, name)) {
+      return c.json({ error: phoneTakenMessage(byPhone.name) }, 409);
     }
-    const customer = await prisma.customer.update({
-      where: { id: byPhone.id },
-      data: { name, phone },
-    });
-    return c.json({ customer: serialize(customer) });
+    if (byPhone.phone !== phone) {
+      const customer = await prisma.customer.update({
+        where: { id: byPhone.id },
+        data: { phone },
+      });
+      return c.json({ customer: serialize(customer) });
+    }
+    return c.json({ customer: serialize(byPhone) });
   }
 
   const customer = await prisma.customer.create({
@@ -269,12 +264,20 @@ customerRoutes.post("/", requireAuth, requireAnyPermission("customers.manage"), 
     return c.json({ error: "Invalid customer payload", details: parsed.error.flatten() }, 400);
   }
 
+  const phone = parsed.data.phone?.trim() || null;
+  if (phone) {
+    const byPhone = await findCustomerByPhone(storeId, phone);
+    if (byPhone) {
+      return c.json({ error: phoneTakenMessage(byPhone.name) }, 409);
+    }
+  }
+
   const customer = await prisma.customer.create({
     data: {
       storeId,
       name: parsed.data.name.trim(),
       email: parsed.data.email ?? null,
-      phone: parsed.data.phone?.trim() || null,
+      phone,
       notes: parsed.data.notes ?? null,
       loyaltyEnrolled: parsed.data.loyaltyEnrolled ?? false,
       loyaltyJoinedAt: parsed.data.loyaltyEnrolled ? new Date() : null,
@@ -303,6 +306,16 @@ customerRoutes.patch("/:id", requireAuth, requireAnyPermission("customers.manage
 
   const enrolling =
     parsed.data.loyaltyEnrolled === true && !existing.loyaltyEnrolled;
+
+  if (parsed.data.phone !== undefined) {
+    const phone = parsed.data.phone?.trim() || null;
+    if (phone) {
+      const byPhone = await findCustomerByPhone(storeId, phone);
+      if (byPhone && byPhone.id !== existing.id) {
+        return c.json({ error: phoneTakenMessage(byPhone.name) }, 409);
+      }
+    }
+  }
 
   const customer = await prisma.customer.update({
     where: { id: existing.id },

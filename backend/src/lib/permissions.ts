@@ -1,7 +1,8 @@
 import type { UserRole } from "@prisma/client";
 
 /** Stored beside permission keys once an administrator saves a role on the new catalog. */
-export const PERMISSION_REVISION = "_v6";
+export const PERMISSION_REVISION = "_v7";
+const PERMISSION_REVISION_V6 = "_v6";
 const PERMISSION_REVISION_V5 = "_v5";
 const PERMISSION_REVISION_V4 = "_v4";
 const PERMISSION_REVISION_V3 = "_v3";
@@ -34,6 +35,7 @@ export const PERMISSION_KEYS = [
   "products.view",
   "products.details",
   "products.price",
+  "products.stockDetails",
   "products.manage",
   "categories.view",
   "categories.manage",
@@ -126,6 +128,7 @@ export const PERMISSION_CATALOG: PermissionDefinition[] = [
   { key: "products.view", label: "View products", group: "Inventory" },
   { key: "products.details", label: "Create item details", group: "Inventory", detail: true },
   { key: "products.price", label: "Set product prices", group: "Inventory", detail: true },
+  { key: "products.stockDetails", label: "Stock details", group: "Inventory", detail: true },
   { key: "products.manage", label: "Manage products", group: "Inventory", detail: true },
   { key: "categories.view", label: "View categories", group: "Inventory" },
   { key: "categories.manage", label: "Manage categories", group: "Inventory", detail: true },
@@ -150,7 +153,8 @@ export const DEFAULT_ROLE_POLICIES: Record<UserRole, PermissionKey[]> = {
       key !== "staff.manage" &&
       key !== "roles.manage" &&
       key !== "settings.manage" &&
-      key !== "orders.projectDetails",
+      key !== "orders.projectDetails" &&
+      key !== "products.stockDetails",
   ),
   CASHIER: [
     "dashboard.view",
@@ -191,6 +195,7 @@ const PERMISSION_REQUIRES: Partial<Record<PermissionKey, PermissionKey>> = {
   "inventory.manage": "inventory.view",
   "products.details": "products.view",
   "products.price": "products.view",
+  "products.stockDetails": "products.view",
   "products.manage": "products.view",
   "categories.manage": "categories.view",
   "stock.adjust": "stock.view",
@@ -223,7 +228,9 @@ export function readStoredPermissions(value: unknown): {
   const strings = value.filter((item): item is string => typeof item === "string");
   const revision = strings.includes(PERMISSION_REVISION)
     ? PERMISSION_REVISION
-    : strings.includes(PERMISSION_REVISION_V5)
+    : strings.includes(PERMISSION_REVISION_V6)
+      ? PERMISSION_REVISION_V6
+      : strings.includes(PERMISSION_REVISION_V5)
       ? PERMISSION_REVISION_V5
       : strings.includes(PERMISSION_REVISION_V4)
         ? PERMISSION_REVISION_V4
@@ -255,12 +262,27 @@ function grantLegacyProjectPhases(keys: Set<PermissionKey>) {
   for (const key of PROJECT_PHASE_KEYS) keys.add(key);
 }
 
-/** Administrators keep the new report so they can decide who else may open it. */
+/** Administrators keep a new report so they can decide who else may open it. */
+function grantAdminReport(
+  role: UserRole | null | undefined,
+  keys: Set<PermissionKey>,
+  key: PermissionKey,
+) {
+  if (role === "ADMIN") keys.add(key);
+}
+
 function grantProjectDetailsReport(
   role: UserRole | null | undefined,
   keys: Set<PermissionKey>,
 ) {
-  if (role === "ADMIN") keys.add("orders.projectDetails");
+  grantAdminReport(role, keys, "orders.projectDetails");
+}
+
+function grantStockDetails(
+  role: UserRole | null | undefined,
+  keys: Set<PermissionKey>,
+) {
+  grantAdminReport(role, keys, "products.stockDetails");
 }
 
 export function implyDependencies(permissions: PermissionKey[]): PermissionKey[] {
@@ -312,6 +334,7 @@ function expandLegacy(role: UserRole | null, keys: PermissionKey[]): PermissionK
 
   grantLegacyProjectPhases(next);
   grantProjectDetailsReport(role, next);
+  grantStockDetails(role, next);
   return implyDependencies([...next]);
 }
 
@@ -322,15 +345,22 @@ export function parsePermissionList(
   const stored = readStoredPermissions(value);
   if (!stored) return null;
   if (stored.configured) return implyDependencies(stored.keys);
+  if (stored.revision === PERMISSION_REVISION_V6) {
+    const next = new Set(stored.keys);
+    grantStockDetails(role, next);
+    return implyDependencies([...next]);
+  }
   if (stored.revision === PERMISSION_REVISION_V5) {
     const next = new Set(stored.keys);
     grantProjectDetailsReport(role, next);
+    grantStockDetails(role, next);
     return implyDependencies([...next]);
   }
   if (stored.revision === PERMISSION_REVISION_V4) {
     const next = new Set(stored.keys);
     grantLegacyProjectPhases(next);
     grantProjectDetailsReport(role, next);
+    grantStockDetails(role, next);
     return implyDependencies([...next]);
   }
   if (
@@ -346,6 +376,7 @@ export function parsePermissionList(
     }
     grantLegacyProjectPhases(next);
     grantProjectDetailsReport(role, next);
+    grantStockDetails(role, next);
     return implyDependencies([...next]);
   }
   return expandLegacy(role ?? null, stored.keys);

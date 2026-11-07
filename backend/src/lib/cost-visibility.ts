@@ -4,7 +4,8 @@ import { userHasPermission, type PermissionKey } from "./permissions.js";
 export function canViewCost(permissions: PermissionKey[]): boolean {
   return (
     userHasPermission(permissions, "products.price") ||
-    userHasPermission(permissions, "products.manage")
+    userHasPermission(permissions, "products.manage") ||
+    userHasPermission(permissions, "products.stockDetails")
   );
 }
 

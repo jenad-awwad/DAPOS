@@ -1,6 +1,7 @@
 import {
   ActionIcon,
   Badge,
+  Box,
   Button,
   Card,
   Grid,
@@ -8,10 +9,13 @@ import {
   Loader,
   Modal,
   NumberInput,
+  Progress,
   Select,
+  SimpleGrid,
   Stack,
   Stepper,
   Table,
+  Tabs,
   Text,
   Textarea,
   TextInput,
@@ -20,7 +24,7 @@ import {
 import { useForm } from "@mantine/form";
 import { useDebouncedValue, useDisclosure } from "@mantine/hooks";
 import { notifications } from "@mantine/notifications";
-import { IconEdit, IconPlus, IconSearch, IconTrash, IconX } from "@tabler/icons-react";
+import { IconEdit, IconFileSpreadsheet, IconPlus, IconSearch, IconTrash, IconX } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
@@ -43,6 +47,13 @@ import {
   setProductPricing,
   updateProduct,
 } from "../lib/api";
+import {
+  exportProductDetailsToExcel,
+  exportProductsToExcel,
+  productStatusLabel,
+  stockAtCost,
+  stockAtPrice,
+} from "../lib/exportProducts";
 import { formatDate, formatMoney, toMoney } from "../lib/format";
 import type { Product } from "../lib/types";
 
@@ -97,6 +108,8 @@ function toIsoDateTime(localValue: string): string | undefined {
 export function ProductsAdminPage() {
   const canEditDetails = useHasPermission(["products.details", "products.manage"]);
   const canSetPrice = useHasPermission(["products.price", "products.manage"]);
+  const canViewStockDetails = useHasPermission("products.stockDetails");
+  const canSeeStockCost = canSetPrice || canViewStockDetails;
   const canManageProducts = useHasPermission("products.manage");
   const canAddVendor = useHasPermission("vendors.manage");
   const canViewProducts = useHasPermission([
@@ -111,6 +124,7 @@ export function ProductsAdminPage() {
   const [pricingOpened, { open: openPricing, close: closePricing }] = useDisclosure(false);
   const [step, setStep] = useState(0);
   const [barcodeMode, setBarcodeMode] = useState<BarcodeMode>("auto");
+  const [uploadPercent, setUploadPercent] = useState<number | null>(null);
   const [createdProduct, setCreatedProduct] = useState<Product | null>(null);
   const [pricingProduct, setPricingProduct] = useState<Product | null>(null);
   const [editing, setEditing] = useState<Product | null>(null);
@@ -123,6 +137,7 @@ export function ProductsAdminPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [productTab, setProductTab] = useState("products");
 
   const [debouncedName] = useDebouncedValue(nameSearch.trim(), 300);
   const [debouncedBarcode] = useDebouncedValue(barcodeSearch.trim(), 300);
@@ -216,7 +231,11 @@ export function ProductsAdminPage() {
   };
 
   const createBasicMutation = useMutation({
-    mutationFn: createProduct,
+    mutationFn: (payload: Parameters<typeof createProduct>[0]) => {
+      if (payload.imageUrl.startsWith("data:")) setUploadPercent(0);
+      return createProduct(payload, (percent) => setUploadPercent(percent));
+    },
+    onSettled: () => setUploadPercent(null),
     onSuccess: ({ product }) => {
       invalidateProducts();
       queryClient.invalidateQueries({ queryKey: ["pricing-requests"] });
@@ -259,8 +278,8 @@ export function ProductsAdminPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, values }: { id: string; values: EditFormValues }) =>
-      updateProduct(id, {
+    mutationFn: ({ id, values }: { id: string; values: EditFormValues }) => {
+      const payload = {
         ...(canEditDetails
           ? {
               sku: values.sku || null,
@@ -276,7 +295,11 @@ export function ProductsAdminPage() {
         // Pricing is only sent once a positive price is entered. A product that is
         // still "pending pricing" has price 0, which the server rejects as a price.
         ...(canSetPrice && values.price > 0 ? { price: values.price, cost: values.cost } : {}),
-      }),
+      };
+      if (values.imageUrl.startsWith("data:")) setUploadPercent(0);
+      return updateProduct(id, payload, (percent) => setUploadPercent(percent));
+    },
+    onSettled: () => setUploadPercent(null),
     onSuccess: () => {
       invalidateProducts();
       notifications.show({ color: "green", message: "Product updated" });
@@ -340,6 +363,25 @@ export function ProductsAdminPage() {
   }));
 
   const products = productsQuery.data?.products ?? [];
+  const stockUnits = products.reduce((sum, product) => sum + product.onStock, 0);
+  const stockPriceValue = products.reduce((sum, product) => sum + stockAtPrice(product), 0);
+  const stockCostValue = products.reduce(
+    (sum, product) => sum + (stockAtCost(product) ?? 0),
+    0,
+  );
+
+  const downloadExcel = (kind: "products" | "details") => {
+    try {
+      if (kind === "products") exportProductsToExcel(products);
+      else exportProductDetailsToExcel(products, canSeeStockCost);
+      notifications.show({ color: "green", message: "Excel file downloaded" });
+    } catch (err) {
+      notifications.show({
+        color: "red",
+        message: err instanceof Error ? err.message : "Could not export Excel",
+      });
+    }
+  };
 
   const openCreate = () => {
     setEditing(null);
@@ -467,6 +509,17 @@ export function ProductsAdminPage() {
         </Stack>
       </Card>
 
+      <Tabs
+        value={canViewStockDetails ? productTab : "products"}
+        onChange={(value) => setProductTab(value ?? "products")}
+      >
+        <Tabs.List>
+          <Tabs.Tab value="products">Products</Tabs.Tab>
+          {canViewStockDetails ? <Tabs.Tab value="details">Stock details</Tabs.Tab> : null}
+        </Tabs.List>
+
+        <Tabs.Panel value="products" pt="md">
+          <Stack gap="lg">
       {canSetPrice ? (
         <Card withBorder padding="md" radius="md">
           <Title order={4} mb="sm">
@@ -555,6 +608,18 @@ export function ProductsAdminPage() {
         </Card>
       ) : null}
 
+      <Group justify="flex-end">
+        <Button
+          variant="light"
+          color="green"
+          leftSection={<IconFileSpreadsheet size={16} />}
+          disabled={products.length === 0}
+          onClick={() => downloadExcel("products")}
+        >
+          Export Excel
+        </Button>
+      </Group>
+
       <Table striped highlightOnHover>
         <Table.Thead>
           <Table.Tr>
@@ -639,6 +704,157 @@ export function ProductsAdminPage() {
           No products match your filters
         </Text>
       ) : null}
+          </Stack>
+        </Tabs.Panel>
+
+        {canViewStockDetails ? (
+        <Tabs.Panel value="details" pt="md">
+          <Stack gap="md">
+            <Group justify="flex-end">
+              <Button
+                variant="light"
+                color="green"
+                leftSection={<IconFileSpreadsheet size={16} />}
+                disabled={products.length === 0}
+                onClick={() => downloadExcel("details")}
+              >
+                Export Excel
+              </Button>
+            </Group>
+
+            <SimpleGrid cols={{ base: 1, sm: 2, lg: canSeeStockCost ? 4 : 3 }}>
+              <Card withBorder padding="md" radius="md">
+                <Text size="xs" c="dimmed">
+                  Products
+                </Text>
+                <Text fw={700} size="xl">
+                  {products.length}
+                </Text>
+              </Card>
+              <Card withBorder padding="md" radius="md">
+                <Text size="xs" c="dimmed">
+                  Units in stock
+                </Text>
+                <Text fw={700} size="xl">
+                  {stockUnits}
+                </Text>
+              </Card>
+              <Card withBorder padding="md" radius="md">
+                <Text size="xs" c="dimmed">
+                  Stock at selling price
+                </Text>
+                <Text fw={700} size="xl">
+                  {formatMoney(stockPriceValue, store!.currency)}
+                </Text>
+              </Card>
+              {canSeeStockCost ? (
+                <Card withBorder padding="md" radius="md">
+                  <Text size="xs" c="dimmed">
+                    Stock at cost
+                  </Text>
+                  <Text fw={700} size="xl">
+                    {formatMoney(stockCostValue, store!.currency)}
+                  </Text>
+                </Card>
+              ) : null}
+            </SimpleGrid>
+
+            <Box style={{ overflowX: "auto" }}>
+              <Table striped highlightOnHover>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Name</Table.Th>
+                    <Table.Th>Barcode</Table.Th>
+                    <Table.Th>Vendor</Table.Th>
+                    {canSeeStockCost ? <Table.Th>Cost</Table.Th> : null}
+                    <Table.Th>Price</Table.Th>
+                    <Table.Th>Stock</Table.Th>
+                    <Table.Th>Stock at price</Table.Th>
+                    {canSeeStockCost ? <Table.Th>Stock at cost</Table.Th> : null}
+                    <Table.Th>Created</Table.Th>
+                    <Table.Th>Status</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
+                  {products.map((product) => {
+                    const lineCost = stockAtCost(product);
+                    return (
+                      <Table.Tr key={product.id}>
+                        <Table.Td>{product.name}</Table.Td>
+                        <Table.Td>{product.barcode}</Table.Td>
+                        <Table.Td>{product.vendor?.name ?? product.supplier}</Table.Td>
+                        {canSeeStockCost ? (
+                          <Table.Td>
+                            {product.cost == null
+                              ? "—"
+                              : formatMoney(toMoney(product.cost), store!.currency)}
+                          </Table.Td>
+                        ) : null}
+                        <Table.Td>
+                          {product.isPriced
+                            ? formatMoney(toMoney(product.price), store!.currency)
+                            : "—"}
+                        </Table.Td>
+                        <Table.Td>{product.onStock}</Table.Td>
+                        <Table.Td>
+                          {formatMoney(stockAtPrice(product), store!.currency)}
+                        </Table.Td>
+                        {canSeeStockCost ? (
+                          <Table.Td>
+                            {lineCost == null
+                              ? "—"
+                              : formatMoney(lineCost, store!.currency)}
+                          </Table.Td>
+                        ) : null}
+                        <Table.Td>{formatDate(product.createdAt)}</Table.Td>
+                        <Table.Td>
+                          <Badge
+                            color={
+                              product.isActive === false
+                                ? "red"
+                                : product.isPriced
+                                  ? "green"
+                                  : "orange"
+                            }
+                            variant="light"
+                          >
+                            {productStatusLabel(product)}
+                          </Badge>
+                        </Table.Td>
+                      </Table.Tr>
+                    );
+                  })}
+                </Table.Tbody>
+                {products.length > 0 ? (
+                  <Table.Tfoot>
+                    <Table.Tr>
+                      <Table.Th>Total</Table.Th>
+                      <Table.Th />
+                      <Table.Th />
+                      {canSeeStockCost ? <Table.Th /> : null}
+                      <Table.Th />
+                      <Table.Th>{stockUnits}</Table.Th>
+                      <Table.Th>{formatMoney(stockPriceValue, store!.currency)}</Table.Th>
+                      {canSeeStockCost ? (
+                        <Table.Th>{formatMoney(stockCostValue, store!.currency)}</Table.Th>
+                      ) : null}
+                      <Table.Th />
+                      <Table.Th />
+                    </Table.Tr>
+                  </Table.Tfoot>
+                ) : null}
+              </Table>
+            </Box>
+
+            {products.length === 0 ? (
+              <Text c="dimmed" ta="center" py="xl">
+                No products match your filters
+              </Text>
+            ) : null}
+          </Stack>
+        </Tabs.Panel>
+        ) : null}
+      </Tabs>
 
       <Modal
         opened={opened}
@@ -685,6 +901,7 @@ export function ProductsAdminPage() {
                 value={editForm.values.imageUrl}
                 onChange={(value) => editForm.setFieldValue("imageUrl", value)}
                 error={editForm.errors.imageUrl as string | undefined}
+                uploadPercent={uploadPercent}
               />
               {canSetPrice ? (
                 <Group grow>
@@ -706,6 +923,9 @@ export function ProductsAdminPage() {
                 clearable
                 {...editForm.getInputProps("categoryId")}
               />
+              {uploadPercent !== null ? (
+                <Progress value={uploadPercent} color="green" size="sm" aria-label="Upload progress" />
+              ) : null}
               <Button type="submit" color="green" loading={updateMutation.isPending}>
                 Save changes
               </Button>
@@ -784,6 +1004,7 @@ export function ProductsAdminPage() {
                     value={basicForm.values.imageUrl}
                     onChange={(value) => basicForm.setFieldValue("imageUrl", value)}
                     error={basicForm.errors.imageUrl as string | undefined}
+                    uploadPercent={uploadPercent}
                   />
                   <NumberInput label="Stock" min={0} required {...basicForm.getInputProps("onStock")} />
                   <Select
@@ -792,6 +1013,9 @@ export function ProductsAdminPage() {
                     clearable
                     {...basicForm.getInputProps("categoryId")}
                   />
+                  {uploadPercent !== null ? (
+                    <Progress value={uploadPercent} color="green" size="sm" aria-label="Upload progress" />
+                  ) : null}
                   <Button type="submit" color="green" loading={createBasicMutation.isPending}>
                     {canSetPrice ? "Save and continue to pricing" : "Submit for pricing"}
                   </Button>

@@ -1,11 +1,11 @@
-import {
-  SegmentedControl,
-  Stack,
-  Text,
-  TextInput,
-} from "@mantine/core";
+import { ActionIcon, SegmentedControl, Stack, Text, TextInput } from "@mantine/core";
 import { IconBarcode } from "@tabler/icons-react";
-import { useRef } from "react";
+import { useRef, useState } from "react";
+import {
+  BarcodeCameraScanner,
+  primeScanFeedback,
+  requestBarcodeCamera,
+} from "./BarcodeCameraScanner";
 
 type BarcodeMode = "auto" | "scan";
 
@@ -24,7 +24,14 @@ export function ProductBarcodeField({
   onChange,
   error,
 }: ProductBarcodeFieldProps) {
-  const scanInputRef = useRef<HTMLInputElement>(null);
+  const cameraRequestRef = useRef<Promise<MediaStream> | null>(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+
+  const openCameraScanner = () => {
+    primeScanFeedback();
+    cameraRequestRef.current = requestBarcodeCamera();
+    setScannerOpen(true);
+  };
 
   return (
     <Stack gap="xs">
@@ -46,9 +53,18 @@ export function ProductBarcodeField({
       ) : (
         <>
           <TextInput
-            ref={scanInputRef}
             placeholder="Scan or type barcode from product"
-            leftSection={<IconBarcode size={16} />}
+            leftSectionPointerEvents="all"
+            leftSection={
+              <ActionIcon
+                variant="subtle"
+                color="gray"
+                aria-label="Scan barcode with camera"
+                onClick={openCameraScanner}
+              >
+                <IconBarcode size={16} />
+              </ActionIcon>
+            }
             value={value}
             onChange={(e) => onChange(e.currentTarget.value)}
             error={error}
@@ -57,8 +73,19 @@ export function ProductBarcodeField({
             }}
           />
           <Text size="xs" c="dimmed">
-            Use a barcode scanner or type the code printed on the package.
+            Tap the barcode icon to scan with the camera, or type the code on the package.
           </Text>
+          <BarcodeCameraScanner
+            opened={scannerOpen}
+            streamRequestRef={cameraRequestRef}
+            readingLabel="Reading barcode…"
+            onClose={() => setScannerOpen(false)}
+            onDetected={async (code) => {
+              onChange(code);
+              setScannerOpen(false);
+              return { ok: true, message: `Barcode ${code}` };
+            }}
+          />
         </>
       )}
     </Stack>

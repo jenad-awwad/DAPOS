@@ -75,6 +75,7 @@ export const PERMISSION_CATALOG: PermissionDefinition[] = [
   { key: "products.view", label: "View products", group: "Inventory" },
   { key: "products.details", label: "Create item details", group: "Inventory", detail: true },
   { key: "products.price", label: "Set product prices", group: "Inventory", detail: true },
+  { key: "products.stockDetails", label: "Stock details", group: "Inventory", detail: true },
   { key: "products.manage", label: "Manage products", group: "Inventory", detail: true },
   { key: "categories.view", label: "View categories", group: "Inventory" },
   { key: "categories.manage", label: "Manage categories", group: "Inventory", detail: true },
@@ -111,6 +112,7 @@ const PERMISSION_REQUIRES: Partial<Record<PermissionKey, PermissionKey>> = {
   "inventory.manage": "inventory.view",
   "products.details": "products.view",
   "products.price": "products.view",
+  "products.stockDetails": "products.view",
   "products.manage": "products.view",
   "categories.manage": "categories.view",
   "stock.adjust": "stock.view",
@@ -158,7 +160,8 @@ export const DEFAULT_ROLE_POLICIES: RolePoliciesMap = {
       key !== "staff.manage" &&
       key !== "roles.manage" &&
       key !== "settings.manage" &&
-      key !== "orders.projectDetails",
+      key !== "orders.projectDetails" &&
+      key !== "products.stockDetails",
   ),
   CASHIER: [
     "dashboard.view",
@@ -216,6 +219,7 @@ function roleFallback(role: UserRole, permission: PermissionKey): boolean {
       "roles.manage",
       "settings.manage",
       "orders.projectDetails",
+      "products.stockDetails",
     ].includes(permission);
   }
   if (permission === "vendors.record") return true;
